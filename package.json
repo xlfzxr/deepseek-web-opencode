@@ -6,10 +6,10 @@
   "scripts": {
     "prelogin": "node scripts/ensure-adb.mjs",
     "login": "node --require ./src/android-preload.cjs src/login.mjs",
-    "start": "node --require ./src/android-preload.cjs src/server.mjs"
+    "start": "node --require ./src/android-preload.cjs src/server.mjs",
+    "smoke": "node --require ./src/android-preload.cjs scripts/smoke.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.54.2"
-  },
-  "devDependencies": {}
+  }
 }
