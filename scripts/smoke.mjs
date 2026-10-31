@@ -35,7 +35,7 @@ async function sessionStoreChecks() {
 async function main() {
   sessionStoreChecks();
 
-  const server = await startServer(18787);
+  const server = await startServer(0);
   const port = server.address().port;
   const base = `http://127.0.0.1:${port}`;
 

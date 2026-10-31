@@ -7,7 +7,9 @@
     "prelogin": "node scripts/ensure-adb.mjs",
     "login": "node --require ./src/android-preload.cjs src/login.mjs",
     "start": "node --require ./src/android-preload.cjs src/server.mjs",
-    "smoke": "node --require ./src/android-preload.cjs scripts/smoke.mjs"
+    "smoke": "node --require ./src/android-preload.cjs scripts/smoke.mjs",
+    "test:dsml": "node --require ./src/android-preload.cjs scripts/test-dsml.mjs",
+    "test": "npm run smoke && npm run test:dsml"
   },
   "dependencies": {
     "playwright-core": "^1.54.2"
