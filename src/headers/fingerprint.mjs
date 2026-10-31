@@ -206,8 +206,7 @@ export function buildFingerprint(options = {}) {
     captured["user-agent"] || String(options.userAgent || "").trim() || DEFAULT_USER_AGENT;
   const parsed = parseUserAgent(userAgent);
 
-  const locale =
-    String(options.locale || process.env.DEEPSEEK_LOCALE || "en-US").trim() || "en-US";
+  const locale = String(options.locale || "en-US").trim() || "en-US";
   const acceptLanguage =
     String(options.acceptLanguage || "").trim() || acceptLanguageFor(locale);
   const timezoneOffsetSeconds = Number.isFinite(Number(options.timezoneOffsetSeconds))

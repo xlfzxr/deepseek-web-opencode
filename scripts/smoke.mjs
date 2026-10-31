@@ -58,6 +58,11 @@ async function main() {
     "POST /v1/chat/completions (stream=false, no auth) -> 500 + valid JSON error",
     chatJsonRes.status === 500 && typeof chatJsonBody.error === "string" && chatJsonBody.error.length > 0,
   );
+  check(
+    "POST /v1/chat/completions -> stable auth error code",
+    chatJsonBody.code === "auth_missing",
+    String(chatJsonBody.code),
+  );
 
   const chatSseRes = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
@@ -75,6 +80,11 @@ async function main() {
       chatSseRes.headers.get("content-type").includes("text/event-stream") &&
       chatSseText.includes("data: ") &&
       chatSseText.includes("data: [DONE]"),
+  );
+  check(
+    "SSE error frame keeps { error: { message } } shape",
+    chatSseText.includes('"error":{"message"') && chatSseText.includes("auth_missing"),
+    chatSseText.slice(0, 160),
   );
 
   const responsesJsonRes = await fetch(`${base}/v1/responses`, {

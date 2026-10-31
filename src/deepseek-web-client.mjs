@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { SHA3_WASM_B64 } from "./deepseek-pow-wasm.mjs";
 import { ENDPOINTS, createHeaderLayer } from "./headers/upstream.mjs";
+import {
+  UpstreamError,
+  UpstreamErrorKind,
+  upstreamHttpError,
+} from "./upstream-error.mjs";
 
 const DEEPSEEK_BASE_URL = "https://chat.deepseek.com";
 const DEFAULT_USER_AGENT =
@@ -30,31 +35,27 @@ async function loadDeepSeekHashWasm() {
   return wasmInstancePromise;
 }
 
-function upstreamError(label, res, detail) {
-  const body = String(detail || "").replace(/\s+/g, " ").trim().slice(0, 300);
-  const hint =
-    res.status === 403 || res.status === 429 || /^\s*</.test(body)
-      ? "（疑似被 WAF 拦截：检查 /api/fingerprint 的 warnings，并用 `npm run fingerprint:capture` 导入浏览器原始头）"
-      : "";
-  return new Error(`${label}：HTTP ${res.status}${hint}${body ? ` ${body}` : ""}`);
-}
-
 export class DeepSeekWebClient {
   constructor(options = {}) {
     this.cookie = options.cookie || "";
     this.bearer = options.bearer || "";
     this.userAgent = options.userAgent || DEFAULT_USER_AGENT;
+    // Options come from the config layer; the header layer never re-reads process.env
+    // when `env` is injected (see src/config.mjs).
+    const headerOptions = {
+      ...(options.headerOptions || {}),
+      ...(options.capturePath ? { capturePath: options.capturePath } : {}),
+      ...(options.devicePath ? { devicePath: options.devicePath } : {}),
+    };
     // One header layer per client: it owns the fingerprint, device id and risk cache.
     this.headerLayer =
       options.headerLayer ||
       createHeaderLayer({
+        ...headerOptions,
         cookie: this.cookie,
         bearer: this.bearer,
-        userAgent: this.userAgent,
-        capturePath: options.capturePath,
-        devicePath: options.devicePath,
-        env: options.env,
-        log: options.log,
+        userAgent: headerOptions.userAgent || this.userAgent,
+        log: headerOptions.log || options.log,
       });
     this.userAgent = this.headerLayer.fingerprint.userAgent;
   }
@@ -89,13 +90,16 @@ export class DeepSeekWebClient {
     });
 
     if (!res.ok) {
-      throw upstreamError("创建 DeepSeek PoW 失败", res, await res.text());
+      throw upstreamHttpError("创建 DeepSeek PoW 失败", res, await res.text());
     }
 
     const data = await res.json();
     const challenge = data.data?.biz_data?.challenge || data.data?.challenge || data.challenge;
     if (!challenge) {
-      throw new Error("DeepSeek PoW 返回里没有 challenge");
+      throw new UpstreamError("DeepSeek PoW 返回里没有 challenge", {
+        kind: UpstreamErrorKind.PROTOCOL,
+        retryable: true,
+      });
     }
     return challenge;
   }
@@ -124,7 +128,10 @@ export class DeepSeekWebClient {
         }
         nonce++;
       }
-      throw new Error("DeepSeek sha256 PoW 计算超时");
+      throw new UpstreamError("DeepSeek sha256 PoW 计算超时", {
+        kind: UpstreamErrorKind.TIMEOUT,
+        retryable: true,
+      });
     }
 
     if (algorithm === "DeepSeekHashV1") {
@@ -153,12 +160,18 @@ export class DeepSeekWebClient {
       addToStack(16);
 
       if (status === 0) {
-        throw new Error("DeepSeekHashV1 PoW 没有找到答案");
+        throw new UpstreamError("DeepSeekHashV1 PoW 没有找到答案", {
+          kind: UpstreamErrorKind.PROTOCOL,
+          retryable: false,
+        });
       }
       return answer;
     }
 
-    throw new Error(`不支持的 DeepSeek PoW 算法：${algorithm}`);
+    throw new UpstreamError(`不支持的 DeepSeek PoW 算法：${algorithm}`, {
+      kind: UpstreamErrorKind.PROTOCOL,
+      retryable: false,
+    });
   }
 
   async createChatSession(signal) {
@@ -172,14 +185,17 @@ export class DeepSeekWebClient {
     });
 
     if (!res.ok) {
-      throw upstreamError("创建 DeepSeek 会话失败", res, await res.text());
+      throw upstreamHttpError("创建 DeepSeek 会话失败", res, await res.text());
     }
 
     const data = await res.json();
     const session = data.data?.biz_data?.chat_session || data.data?.biz_data || {};
     const sessionId = session.id || session.chat_session_id || "";
     if (!sessionId) {
-      throw new Error("DeepSeek 会话返回里没有 session id");
+      throw new UpstreamError("DeepSeek 会话返回里没有 session id", {
+        kind: UpstreamErrorKind.PROTOCOL,
+        retryable: true,
+      });
     }
     return {
       ...session,
@@ -222,13 +238,30 @@ export class DeepSeekWebClient {
     });
 
     if (!res.ok) {
-      throw new Error(`DeepSeek 对话请求失败：${res.status} ${await res.text()}`);
+      throw upstreamHttpError("DeepSeek 对话请求失败", res, await res.text());
     }
     if (!res.body) {
-      throw new Error("DeepSeek 对话没有返回流");
+      throw new UpstreamError("DeepSeek 对话没有返回流", {
+        kind: UpstreamErrorKind.PROTOCOL,
+        retryable: true,
+      });
     }
     return res.body;
   }
+}
+
+// Header inspection for observability. Exposed by the adapter so orchestration/server
+// never import the header layer directly.
+export function describeFingerprintHeaders(options = {}) {
+  const headerOptions = options.headerOptions || {};
+  const layer = createHeaderLayer({
+    ...headerOptions,
+    cookie: options.cookie,
+    bearer: options.bearer,
+    userAgent: options.userAgent || headerOptions.userAgent,
+    log: headerOptions.log || options.log,
+  });
+  return layer.describe();
 }
 
 function isReasoningFragmentType(type) {
