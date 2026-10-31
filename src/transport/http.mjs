@@ -14,6 +14,24 @@ export function notFound(res) {
   sendJson(res, 404, { error: "not_found" });
 }
 
+// Abort upstream work when the client hangs up (opencode cancels streams often).
+export function createRequestAbort(res) {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.on("close", onClose);
+  return {
+    signal: controller.signal,
+    abort(reason) {
+      controller.abort(reason);
+    },
+    dispose() {
+      res.off("close", onClose);
+    },
+  };
+}
+
 export function contentTypeFor(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".html") return "text/html; charset=utf-8";

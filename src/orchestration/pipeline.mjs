@@ -4,10 +4,10 @@ import { evMeta, evText, evReasoning, evDone } from "./events.mjs";
 import { BridgeError, ErrorCode } from "./errors.mjs";
 
 export function createPipeline({ authManager, sessionStore, log = () => {}, defaultModel = "deepseek-web/deepseek-chat" }) {
-  async function ensureSession(client, sessionKey) {
+  async function ensureSession(client, sessionKey, signal) {
     const cached = sessionStore.get(sessionKey);
     if (cached?.sessionId) return cached;
-    const session = await client.createChatSession();
+    const session = await client.createChatSession(signal);
     const next = { sessionId: session.chat_session_id, parentMessageId: null };
     sessionStore.set(sessionKey, next);
     return next;
@@ -24,7 +24,7 @@ export function createPipeline({ authManager, sessionStore, log = () => {}, defa
       }
 
       const client = await authManager.getClient(signal);
-      const session = await ensureSession(client, sessionKey);
+      const session = await ensureSession(client, sessionKey, signal);
 
       log(`发送到 DeepSeek Web：${prompt.slice(0, 60).replace(/\s+/g, " ")}`);
 

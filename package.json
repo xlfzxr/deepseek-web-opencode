@@ -9,9 +9,11 @@
     "start": "node --require ./src/android-preload.cjs src/server.mjs",
     "smoke": "node --require ./src/android-preload.cjs scripts/smoke.mjs",
     "test:dsml": "node --require ./src/android-preload.cjs scripts/test-dsml.mjs",
-    "test": "npm run smoke && npm run test:dsml && npm run test:toolcall",
+    "test": "npm run smoke && npm run test:dsml && npm run test:headers && npm run test:toolcall",
     "test:toolcall": "node --require ./src/android-preload.cjs scripts/test-tool-call.mjs",
-    "test:live": "node --require ./src/android-preload.cjs scripts/live-check.mjs"
+    "test:live": "node --require ./src/android-preload.cjs scripts/live-check.mjs",
+    "test:headers": "node --require ./src/android-preload.cjs scripts/test-headers.mjs",
+    "fingerprint:capture": "node scripts/fingerprint-from-capture.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.54.2"

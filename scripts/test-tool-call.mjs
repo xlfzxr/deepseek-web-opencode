@@ -6,6 +6,8 @@ const authDir = mkdtempSync(path.join(tmpdir(), "ds-bridge-e2e-"));
 const authPath = path.join(authDir, "credentials.json");
 writeFileSync(authPath, JSON.stringify({ cookie: "cookie=test", bearer: "bearer-test" }));
 process.env.DEEPSEEK_AUTH_PATH = authPath;
+process.env.DEEPSEEK_AUTH_DIR = authDir;
+process.env.DEEPSEEK_RISK_HEADERS = "0";
 
 const DSML =
   '<|DSML|invoke name="get_weather">' +
@@ -28,10 +30,12 @@ const textStream = () => {
 };
 
 const realFetch = globalThis.fetch;
+const upstreamCalls = [];
 
 globalThis.fetch = async (url, options) => {
   const u = String(url);
   if (u.startsWith("http://127.0.0.1:")) return realFetch(url, options);
+  upstreamCalls.push({ url: u, method: options?.method || "GET", headers: options?.headers || {} });
   if (u.includes("/api/v0/client/settings")) return jsonResponse({ code: 0, data: {} });
   if (u.includes("/api/v0/chat/create_pow_challenge")) {
     const challenge = {
@@ -132,6 +136,32 @@ async function main() {
   );
   check("chat stream: finish_reason tool_calls", finish === "tool_calls");
   check("chat stream: DONE sent", chatStream.text.includes("data: [DONE]"));
+
+  const completionCall = upstreamCalls.find((call) => call.url.endsWith("/api/v0/chat/completion"));
+  const headers = completionCall?.headers || {};
+  check("upstream: sends PoW header", Boolean(headers["x-ds-pow-response"]));
+  check(
+    "upstream: same-origin headers",
+    headers.origin === "https://chat.deepseek.com" &&
+      headers.referer === "https://chat.deepseek.com/" &&
+      headers["sec-fetch-site"] === "same-origin",
+  );
+  check(
+    "upstream: coherent client hints",
+    /"Chromium";v="(\d+)"/.test(headers["sec-ch-ua"] || "") &&
+      String(headers["sec-ch-ua"]).includes(headers["user-agent"].match(/Chrome\/(\d+)/)?.[1] || "-"),
+  );
+  check(
+    "upstream: web client identity",
+    headers["x-client-platform"] === "web" &&
+      Boolean(headers["x-client-version"]) &&
+      Boolean(headers["x-device-id"]) &&
+      headers["x-client-bundle-id"] === "com.deepseek.chat",
+  );
+  check("upstream: GET settings has no body content-type", (() => {
+    const settings = upstreamCalls.find((call) => call.url.includes("/api/v0/client/settings"));
+    return !settings?.headers?.["content-type"];
+  })());
 
   const chatJson = await postJson(base, "/v1/chat/completions", chatBody(false));
   const chatJsonParsed = JSON.parse(chatJson.text);

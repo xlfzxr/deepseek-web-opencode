@@ -27,9 +27,11 @@ import { createAuthManager } from "./orchestration/auth-manager.mjs";
 import { createPipeline } from "./orchestration/pipeline.mjs";
 import { runToolLoop } from "./orchestration/tool-loop.mjs";
 import { createSessionStore } from "./orchestration/session-store.mjs";
-import { sendJson, readJsonBody } from "./transport/http.mjs";
+import { createHeaderLayer } from "./headers/upstream.mjs";
+import { createCorsPolicy } from "./transport/cors.mjs";
+import { createRequestAbort, sendJson, readJsonBody } from "./transport/http.mjs";
 import { createRouter } from "./transport/router.mjs";
-import { sseWrite, sseEvent, sseDone } from "./transport/sse-writer.mjs";
+import { openSse, sseWrite, sseEvent, sseDone } from "./transport/sse-writer.mjs";
 
 export { parseToolCallFromText };
 
@@ -81,14 +83,28 @@ function pushLog(message, level = "info") {
   state.logs.push(entry);
   state.logs = state.logs.slice(-120);
   for (const client of state.clients) {
-    client.write(`data: ${JSON.stringify(entry)}\n\n`);
+    client.data(entry);
   }
   console.log(`[ui] ${message}`);
 }
 
 
+async function describeHeaders() {
+  const client = authManager.peek();
+  if (client?.describeFingerprint) return client.describeFingerprint();
+  const credentials = await readCredentials();
+  return createHeaderLayer({
+    userAgent: credentials?.userAgent,
+    cookie: credentials?.cookie,
+    bearer: credentials?.bearer,
+    env: process.env,
+    log: pushLog,
+  }).describe();
+}
+
 async function statusPayload() {
   const credentials = await readCredentials();
+  const headers = await describeHeaders();
   return {
     running: state.running,
     lastError: state.lastError,
@@ -109,6 +125,15 @@ async function statusPayload() {
       },
     },
     credentials: summarizeCredentials(credentials),
+    headers: {
+      origin: headers.origin,
+      browser: headers.browser === "unknown" ? "unknown" : `${headers.browser}/${headers.browserMajor}`,
+      platform: headers.platform,
+      source: headers.source,
+      deviceSource: headers.deviceSource,
+      riskHeaders: headers.risk,
+      warnings: headers.warnings.length,
+    },
     recentLogs: state.logs.slice(-50),
   };
 }
@@ -141,18 +166,18 @@ async function startLogin(res) {
     });
 }
 
+// UI log stream: EventSource with retry hint + heartbeat so it survives idle proxies.
 async function handleSse(req, res) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
+  const stream = openSse(res, { retryMs: 3000, initialComment: "connected" });
   for (const entry of state.logs.slice(-30)) {
-    res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    stream.data(entry);
   }
-  state.clients.add(res);
+  state.clients.add(stream);
+  stream.onClose(() => {
+    state.clients.delete(stream);
+  });
   req.on("close", () => {
-    state.clients.delete(res);
+    state.clients.delete(stream);
   });
 }
 
@@ -439,11 +464,8 @@ function writeResponseCompleted(res, responseId, model, output) {
 
 async function streamChatCompletions(res, body, options = {}) {
   const tools = extractChatTools(body);
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
+  const stream = openSse(res);
+  const signal = options.signal || stream.signal;
 
   const requestId = `chatcmpl-ds-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -462,7 +484,7 @@ async function streamChatCompletions(res, body, options = {}) {
       normalized,
       tools,
       ctx: { requestId, created, model },
-      signal: options.signal,
+      signal,
       parseToolCall: parseToolCallFromText,
     })) {
       if (event.type === "text_delta" && event.delta) fullText += event.delta;
@@ -512,7 +534,7 @@ async function streamChatCompletions(res, body, options = {}) {
       });
     }
   } else {
-    for await (const event of pipeline.runChatCompletion(normalized, { requestId, created, model }, options.signal)) {
+    for await (const event of pipeline.runChatCompletion(normalized, { requestId, created, model }, signal)) {
       const delta = event.delta ?? "";
       if (!delta || (event.type !== "text_delta" && event.type !== "reasoning_delta")) continue;
       sseWrite(res, {
@@ -545,7 +567,7 @@ async function streamChatCompletions(res, body, options = {}) {
   res.end();
 }
 
-async function jsonChatCompletions(res, body) {
+async function jsonChatCompletions(res, body, signal) {
   const tools = extractChatTools(body);
   const requestId = `chatcmpl-ds-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -558,7 +580,7 @@ async function jsonChatCompletions(res, body) {
   };
 
   let content = "";
-  for await (const event of pipeline.runChatCompletion(normalized, { requestId, created, model })) {
+  for await (const event of pipeline.runChatCompletion(normalized, { requestId, created, model }, signal)) {
     if (event.type === "text_delta" && event.delta) content += event.delta;
   }
 
@@ -621,11 +643,8 @@ async function streamResponses(res, body, options = {}) {
   const sessionKey = responsesSessionKeyFromBody(body);
   rememberResponseSession(responseId, sessionKey);
 
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
+  const stream = openSse(res);
+  const signal = options.signal || stream.signal;
 
   writeResponseStart(res, responseId, model);
   let textStarted = false;
@@ -643,10 +662,10 @@ async function streamResponses(res, body, options = {}) {
         normalized,
         tools,
         ctx: { requestId: responseId, created: Math.floor(Date.now() / 1000), model },
-        signal: options.signal,
+        signal,
         parseToolCall: parseToolCallFromText,
       })
-    : pipeline.runChatCompletion(normalized, { requestId: responseId, created: Math.floor(Date.now() / 1000), model }, options.signal);
+    : pipeline.runChatCompletion(normalized, { requestId: responseId, created: Math.floor(Date.now() / 1000), model }, signal);
 
   for await (const event of upstream) {
     if (event.type !== "text_delta" && event.type !== "reasoning_delta") continue;
@@ -695,7 +714,7 @@ async function streamResponses(res, body, options = {}) {
   res.end();
 }
 
-async function jsonResponses(res, body) {
+async function jsonResponses(res, body, signal) {
   const model = body.model || CHAT_MODEL;
   const responseId = `resp_ds_${Date.now()}`;
   const tools = extractResponseTools(body);
@@ -711,6 +730,7 @@ async function jsonResponses(res, body) {
         searchEnabled: Boolean(body.search_enabled),
       },
       { requestId: responseId, created: Math.floor(Date.now() / 1000), model },
+      signal,
     )) {
       if (event.type === "text_delta" && event.delta) content += event.delta;
     }
@@ -744,7 +764,12 @@ async function handleChatCompletions(req, res) {
     await streamChatCompletions(res, { ...body, stream: true });
     return;
   }
-  await jsonChatCompletions(res, body);
+  const abort = createRequestAbort(res);
+  try {
+    await jsonChatCompletions(res, body, abort.signal);
+  } finally {
+    abort.dispose();
+  }
 }
 
 async function handleResponses(req, res) {
@@ -753,7 +778,12 @@ async function handleResponses(req, res) {
     await streamResponses(res, body);
     return;
   }
-  await jsonResponses(res, body);
+  const abort = createRequestAbort(res);
+  try {
+    await jsonResponses(res, body, abort.signal);
+  } finally {
+    abort.dispose();
+  }
 }
 
 async function handleChatTest(req, res) {
@@ -772,11 +802,18 @@ async function handleChatTest(req, res) {
 }
 
 
+const corsPolicy = createCorsPolicy(process.env.DEEPSEEK_BRIDGE_ALLOW_ORIGINS);
+
 const handleRequest = createRouter({
   publicDir: PUBLIC_DIR,
+  corsPolicy,
   handlers: {
     status: async (req, res) => {
       sendJson(res, 200, await statusPayload());
+    },
+    fingerprint: async (req, res) => {
+      // Redacted view of exactly what the adapter will send upstream.
+      sendJson(res, 200, await describeHeaders());
     },
     events: (req, res) => handleSse(req, res),
     login: (req, res) => startLogin(res),
@@ -799,27 +836,39 @@ export async function startServer(port = Number(process.env.PORT || DEFAULT_UI_P
     pushLog("还没有保存的凭证。");
   }
 
+  const host = process.env.DEEPSEEK_BRIDGE_HOST || "127.0.0.1";
+
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch((error) => {
       const message = error?.message || String(error);
+      const aborted = error?.name === "AbortError" || /abort|cancel/i.test(message);
+
+      // Client hung up (opencode cancels streams): cancel upstream, stay quiet.
+      if (aborted) {
+        if (!res.destroyed && !res.writableEnded) {
+          pushLog("客户端已断开，上游请求已取消。");
+        }
+        return;
+      }
+
       state.lastError = message;
       pushLog(message, "error");
+
+      if (res.destroyed || res.writableEnded) return;
+
       if (!res.headersSent) {
         sendJson(res, 500, { error: message });
       } else {
-        try {
-          sseWrite(res, { error: { message } });
-          sseDone(res);
-        } catch {
-          // Ignore broken client connection.
-        }
+        sseWrite(res, { error: { message } });
+        sseDone(res);
         res.end();
       }
     });
   });
 
-  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
-  console.log(`DeepSeek 桥接器：http://127.0.0.1:${port}`);
+  await new Promise((resolve) => server.listen(port, host, resolve));
+  const shownHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  console.log(`DeepSeek 桥接器：http://${shownHost}:${server.address().port}`);
   return server;
 }
 

@@ -10,8 +10,11 @@ Useful tool-calling patches on top of upstream:
 - **Tolerant DSML tool-call parser** — DeepSeek V3.2/V4 models sometimes emit internal
   `<｜DSML｜invoke…>` markup (double fullwidth pipes, parameters without prefix, missing wrapper).
   The parser now accepts all of these variants instead of only the canonical form.
-- **Refreshed web-client headers** — `x-client-version`, `x-client-locale`, timezone offset,
-  and a 6-field PoW payload.
+- **Header layer for WAF/fingerprint drift** — one coherent fingerprint derived from the
+  login UA (client hints, same-origin `Origin`/`Referer`, `sec-fetch-*`, device id, fresh
+  `x-hif-*` risk tokens), plus an importer for an exact browser capture.
+- **Hardened SSE + local CORS** — eager flush, no-buffer headers, heartbeats, disconnect
+  cancellation, preflight support for browser clients.
 - **Android/Termux support** — `src/android-preload.cjs` shim so `playwright-core` runs,
   adb helper scripts, and preload-wired npm scripts.
 - **Modular architecture** — SSE writing and the whole orchestration flow are split out
@@ -25,12 +28,13 @@ Useful tool-calling patches on top of upstream:
         v
 +----------------------------------------------------------+
 | src/server.mjs  (composition root: handlers + bootstrap)  |
-|   src/transport/        http · router · sse-writer        |
+|   src/transport/        http · router · cors · sse-writer  |
 |   src/orchestration/    errors · events · session-store   |
 |                         auth-manager · pipeline · tool-loop|
+|   src/headers/          fingerprint · upstream · risk     |
 |   src/dsml.mjs          DSML/XML tool-call parser         |
 |   src/openai-shape.mjs  OpenAI prompt/item mapping        |
-|   src/deepseek-web-client.mjs  (PoW, headers, adapter)    |
+|   src/deepseek-web-client.mjs  (PoW, adapter)             |
 +----------------------------------------------------------+
         |  CDP + web API
         v
@@ -38,6 +42,84 @@ Useful tool-calling patches on top of upstream:
 ```
 
 Rule: **transport never calls the adapter directly** — only orchestration does.
+The adapter only *uses* the header layer; nothing else composes upstream headers.
+
+## Header layer (fingerprint, same-origin, SSE)
+
+The bridge is not a browser, but chat.deepseek.com's WAF expects one. Detection is about
+**contradictions**, not single headers, so `src/headers/upstream.mjs` is the only place
+that builds a request:
+
+| Piece | Where | What it guarantees |
+|---|---|---|
+| Fingerprint | `src/headers/fingerprint.mjs` | `user-agent`, `sec-ch-ua*`, `sec-fetch-*`, `accept-language`, `x-client-*` are all derived from one UA + locale + timezone |
+| Same-origin | `src/headers/fingerprint.mjs` | `Origin: https://chat.deepseek.com`, `Referer: …/`, `sec-fetch-site: same-origin`; a captured foreign origin is dropped |
+| Identity | `src/headers/upstream.mjs` | stable `x-device-id` (persisted), `x-client-bundle-id`, `x-device-model` |
+| Risk tokens | `src/headers/risk.mjs` | fresh `x-hif-leim` / `x-hif-dliq` (~10 min TTL, single-flight, soft failure) |
+| PoW | `src/deepseek-web-client.mjs` | `x-ds-pow-response` only on `/chat/completion` |
+
+Inspect exactly what will be sent (credentials redacted):
+
+```bash
+curl -s http://127.0.0.1:8787/api/fingerprint | jq '{browser, platform, source, warnings, risk, headers, sources}'
+```
+
+If `warnings` is non-empty, the fingerprint is internally inconsistent — fix that before
+chasing anything else.
+
+### Exact capture (when the WAF still disagrees)
+
+Derived client hints are best-effort (GREASE brand rotation). To replay the real browser
+verbatim, capture one `/api/v0/chat/completion` request and import it:
+
+```bash
+# 1. capture one request from a logged-in tab (see .capture-ds2.mjs)
+node .capture-ds2.mjs            # writes $TMPDIR/opencode/ds-capture2.json
+
+# 2. sanitize + save to .deepseek-auth/fingerprint.json
+npm run fingerprint:capture -- /path/to/ds-capture2.json
+
+# 3. restart the bridge and re-check
+curl -s http://127.0.0.1:8787/api/fingerprint | jq '.source, .warnings'
+```
+
+The importer keeps fingerprint headers and drops credentials, hop-by-hop headers,
+`content-type`, and expiring `x-hif-*` tokens. `source` becomes `capture+derived`, and
+`sources` in `/api/fingerprint` tells you which layer produced each header
+(`capture` / `fingerprint` / `credentials` / `endpoint` / `pow` / `risk` / `extra`).
+
+### Local same-origin (browser clients)
+
+Requests without an `Origin` header (opencode TUI, curl, Codex) are always accepted.
+Browser origins are accepted when loopback (`http://localhost:*`, `http://127.0.0.1:*`),
+or when listed explicitly. A rejected origin gets a JSON `403 origin_not_allowed`
+instead of an opaque CORS failure, and preflight (`OPTIONS`) is answered with
+`access-control-allow-*` + `access-control-allow-private-network` for Chrome PNA.
+
+### SSE hardening
+
+`openSse()` in `src/transport/sse-writer.mjs` sends
+`text/event-stream` + `cache-control: no-cache, no-store, no-transform` +
+`x-accel-buffering: no`, flushes headers immediately, sends a `retry:` hint on the UI
+log stream, emits `: keep-alive` comments every 15s, and aborts the upstream fetch when
+the client disconnects. `sseWrite`/`sseEvent`/`sseDone` are no-ops after `end`.
+
+### Environment knobs
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEEPSEEK_BRIDGE_HOST` | `127.0.0.1` | listen address (`0.0.0.0` for containers) |
+| `DEEPSEEK_BRIDGE_ALLOW_ORIGINS` | loopback only | comma list of allowed browser origins, or `*` |
+| `DEEPSEEK_SSE_HEARTBEAT_MS` | `15000` | SSE keep-alive comment interval (`0` disables) |
+| `DEEPSEEK_FINGERPRINT_PATH` | `.deepseek-auth/fingerprint.json` | exact capture to replay |
+| `DEEPSEEK_FINGERPRINT_JSON` | – | inline capture JSON (same shape as the file) |
+| `DEEPSEEK_FINGERPRINT_UA` | login UA | override the UA used for derivation |
+| `DEEPSEEK_LOCALE` | `en-US` | drives `accept-language` + `x-client-locale` |
+| `DEEPSEEK_TZ_OFFSET` | system | seconds east of UTC for `x-client-timezone-offset` |
+| `DEEPSEEK_CLIENT_VERSION` | `2.7.0` | `x-client-version` |
+| `DEEPSEEK_DEVICE_ID` | persisted | pin `x-device-id` (else generated once) |
+| `DEEPSEEK_RISK_HEADERS` | `1` | set `0` to skip `x-hif-*` fetches |
+| `DEEPSEEK_RISK_TTL_MS` / `_RETRY_MS` / `_TIMEOUT_MS` | `600000` / `60000` / `4000` | risk token cache tuning |
 
 ## Testing
 
@@ -45,6 +127,7 @@ Rule: **transport never calls the adapter directly** — only orchestration does
 npm test               # everything below
 npm run smoke          # endpoints, auth-missing path, static serving
 npm run test:dsml      # DSML/XML/JSON parser variants
+npm run test:headers   # fingerprint, CORS/preflight, SSE framing, /api/fingerprint
 npm run test:toolcall  # chat + responses tool-call flow via fetch stub
 npm run test:live      # manual: real DeepSeek session (needs login + network)
 ```
@@ -102,6 +185,9 @@ incremental refactors safely (single-task discipline, verification steps, C4 rul
 | `EADDRINUSE 8787` | kill the old bridge process first (`pkill -f src/server.mjs`) |
 | login never starts | `adb connect <tablet>:<port>` then `adb forward tcp:9223 localabstract:chrome_devtools_remote` |
 | empty completion (`0 字符`) | upstream returned nothing; retry, or use `deepseek-reasoner` |
+| upstream `429` + HTML body | WAF/fingerprint mismatch: check `/api/fingerprint` → `warnings`, then import an exact capture (`npm run fingerprint:capture`) |
+| browser client blocked by CORS | add its origin: `DEEPSEEK_BRIDGE_ALLOW_ORIGINS=https://app.example npm start` |
+| SSE cuts off after ~60s idle | keep `DEEPSEEK_SSE_HEARTBEAT_MS` ≤ any proxy idle timeout, and check `x-accel-buffering: no` survives your proxy |
 
 ## Scope & notes
 
