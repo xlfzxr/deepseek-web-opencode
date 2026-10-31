@@ -3,6 +3,20 @@
 ## Unreleased
 
 - Add manual `npm run test:live` to verify the real DeepSeek session and catch upstream drift.
+- Architecture hardening (quality gate): `server.mjs` is now bootstrap + route wiring only;
+  prompt normalization, tool-call registry, JSON/SSE shaping and fingerprint inspection moved
+  into orchestration/transport modules.
+- Add `src/config.mjs` as the single env reader; heartbeat, CORS and header options are
+  injected instead of re-read inside layers.
+- Adapter failures are typed (`src/upstream-error.mjs`: kind/status/retryable) and mapped in
+  orchestration to stable codes (`rate_limited`, `waf_blocked`, `upstream_error`, ...).
+- Auth lifecycle (login + cache invalidation) moved behind `auth-manager`; the composition
+  root no longer imports `deepseek-auth.mjs`.
+- Tool loop contract documented as single-hop (client-executed tools) with an explicit budget
+  cap; added `tool-call-registry`, `request-normalizer`, `provider-client`,
+  `fingerprint-service`, `transport/openai-sse.mjs`, `transport/openai-json.mjs`.
+- Add `npm run test:arch` (import-graph gates) and `npm run test:orchestration`
+  (normalization, error mapping, auth dedupe/failure, tool loop, fingerprint service).
 - Add `src/headers/` header layer: fingerprint derived from the login UA (client hints,
   same-origin Origin/Referer, sec-fetch, x-client-*), persisted `x-device-id`, and
   `x-hif-*` risk-token cache with TTL + single-flight + soft failure.

@@ -19,20 +19,27 @@
 Proyek: bridge DeepSeek Web -> API OpenAI-compatible. Node.js, ESM, tanpa framework.
 Environment: Android (Termux) -> `playwright-core` hanya jalan dengan preload.
 Entry point: `src/server.mjs` (BUKAN root `server.mjs`).
-Adapter protokol: `src/deepseek-web-client.mjs`.
+Adapter protokol: `src/deepseek-web-client.mjs` (+ `src/upstream-error.mjs`).
 Auth: `src/deepseek-auth.mjs`. PoW WASM: `src/deepseek-pow-wasm.mjs`.
+Config: `src/config.mjs` (satu-satunya pembaca env). Header: `src/headers/`.
 Tujuan: memisahkan orkestrasi dari `src/server.mjs` **secara bertahap**
 tanpa mengubah perilaku eksternal (endpoint, format SSE/JSON, header).
 
 ### Arsitektur Target (C4 Level 2)
 
 ```ascii
-[Transport src/transport/ (HTTP/SSE, CORS, router, static)]
+[Config src/config.mjs]  (env sekali di bootstrap, di-inject ke bawah)
+      |
+[Transport src/transport/ (http, router, cors, sse-writer, openai-sse, openai-json)]
       -> [Orchestration src/orchestration/ (events, errors, session-store,
-          auth-manager, pipeline, tool-loop)]
-      -> [Adapter src/deepseek-web-client.mjs (PoW, payload)]
+          auth-manager, pipeline, tool-loop, request-normalizer,
+          tool-call-registry, tool-parser, provider-client, fingerprint-service)]
+      -> [Adapter src/deepseek-web-client.mjs (PoW, payload, upstream-error)]
       -> [Header layer src/headers/ (fingerprint, upstream, risk)]
       -> [DeepSeek Web / Chrome via CDP]
+
+Shared leaf (dipakai lintas layer, tanpa state): src/dsml.mjs, src/openai-shape.mjs
+Composition root: src/server.mjs (bootstrap + route wiring, tanpa business logic)
 ```
 
 Aturan panah (WAJIB):
@@ -41,9 +48,17 @@ Aturan panah (WAJIB):
 - **Adapter** satu-satunya yang bicara dengan DeepSeek Web / Chrome.
 - **Header layer** (`src/headers/`) hanya menyusun header upstream (fingerprint,
   same-origin, x-hif-*) dan tidak melakukan I/O jaringan selain risk cache.
-- Modul leaf (`events.mjs`, `errors.mjs`, `session-store.mjs`,
-  `deepseek-pow-wasm.mjs`) tidak boleh mengimport modul proyek lain.
+- **Config** (`src/config.mjs`) satu-satunya pembaca `process.env`; layer lain menerima
+  nilai lewat parameter. Transport tidak boleh membaca env sama sekali.
+- **server.mjs** hanya bootstrap + route wiring: tanpa import adapter/header, tanpa
+  mapping prompt/response. Target < 620 baris (dijaga `npm run test:arch`).
+- Modul leaf (`events.mjs`, `errors.mjs`, `session-store.mjs`, `tool-call-registry.mjs`,
+  `headers/fingerprint.mjs`, `headers/risk.mjs`, `transport/cors.mjs`, `config.mjs`,
+  `dsml.mjs`, `deepseek-pow-wasm.mjs`) tidak boleh mengimport modul proyek lain.
+- Panah terlarang: transport -> adapter/header, orchestration -> transport,
+  adapter -> transport/orchestration, header -> transport/orchestration/adapter.
 - Pelanggaran panah = bug arsitektur: laporkan, jangan perbaiki diam-diam.
+  Regresinya dikunci oleh `npm run test:arch`.
 
 ## 2. Aturan Keras
 
@@ -71,7 +86,9 @@ Berhenti. Tulis: `BLOCKED: <pertanyaan spesifik>`. Jangan improvisasi.
 
 ## 3. Verifikasi Standar (Termux / Android)
 
-`npm test` menjalankan smoke + DSML + tool-call tests (tanpa kredensial/jaringan).
+`npm test` menjalankan smoke + DSML + orchestration + architecture + header + tool-call
+tests (tanpa kredensial/jaringan). `npm run test:arch` membaca import graph statis dan
+gagal jika arah dependency dilanggar atau `server.mjs` membengkak.
 Verifikasi per task tetap:
 
 ```bash

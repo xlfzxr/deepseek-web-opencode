@@ -5,6 +5,9 @@ export const ErrorCode = {
   POW_FAILED: "pow_failed",
   UPSTREAM_TIMEOUT: "upstream_timeout",
   UPSTREAM_STREAM_BROKEN: "upstream_stream_broken",
+  UPSTREAM_ERROR: "upstream_error",
+  RATE_LIMITED: "rate_limited",
+  WAF_BLOCKED: "waf_blocked",
   TOOL_LOOP_EXCEEDED: "tool_loop_exceeded",
   CANCELLED: "cancelled",
   INVALID_REQUEST: "invalid_request",
@@ -24,6 +27,8 @@ export class BridgeError extends Error {
 const RETRYABLE_CODES = new Set([
   ErrorCode.UPSTREAM_TIMEOUT,
   ErrorCode.UPSTREAM_STREAM_BROKEN,
+  ErrorCode.UPSTREAM_ERROR,
+  ErrorCode.RATE_LIMITED,
 ]);
 
 export function isRetryable(code) {

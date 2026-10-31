@@ -31,8 +31,8 @@ export const ENDPOINTS = Object.freeze({
 const DEFAULT_CLIENT_VERSION = "2.7.0";
 const DEFAULT_BUNDLE_ID = "com.deepseek.chat";
 
-function defaultAuthDir() {
-  return process.env.DEEPSEEK_AUTH_DIR || path.resolve(process.cwd(), ".deepseek-auth");
+function defaultAuthDir(env = {}) {
+  return env.DEEPSEEK_AUTH_DIR || path.resolve(process.cwd(), ".deepseek-auth");
 }
 
 function readJson(readFile, filePath) {
@@ -87,8 +87,8 @@ export function loadCaptureFile(filePath, readFile = (p) => fs.readFileSync(p, "
   };
 }
 
-function resolveDeviceId({ devicePath, env, readFile, writeFile, log }) {
-  const explicit = String(env.DEEPSEEK_DEVICE_ID || "").trim();
+function resolveDeviceId({ deviceId, devicePath, env, readFile, writeFile, log }) {
+  const explicit = String(deviceId || env.DEEPSEEK_DEVICE_ID || "").trim();
   if (explicit) return { deviceId: explicit, source: "env" };
 
   const existing = readJson(readFile, devicePath);
@@ -96,15 +96,15 @@ function resolveDeviceId({ devicePath, env, readFile, writeFile, log }) {
     return { deviceId: existing.deviceId.trim(), source: "file" };
   }
 
-  const deviceId = crypto.randomUUID();
+  const generated = crypto.randomUUID();
   try {
     fs.mkdirSync(path.dirname(devicePath), { recursive: true });
-    writeFile(devicePath, `${JSON.stringify({ deviceId, createdAt: new Date().toISOString() }, null, 2)}\n`);
-    log?.(`已生成设备指纹 x-device-id：${deviceId}`);
+    writeFile(devicePath, `${JSON.stringify({ deviceId: generated, createdAt: new Date().toISOString() }, null, 2)}\n`);
+    log?.(`已生成设备指纹 x-device-id：${generated}`);
   } catch {
     // Read-only filesystem: keep the id for this process only.
   }
-  return { deviceId, source: "generated" };
+  return { deviceId: generated, source: "generated" };
 }
 
 function cleanExtraHeaders(extra = {}) {
@@ -128,14 +128,14 @@ export function createHeaderLayer(options = {}) {
   const cookie = String(options.cookie ?? "").trim();
   const bearer = String(options.bearer ?? "").trim();
 
-  const authDir = options.authDir || env.DEEPSEEK_AUTH_DIR || defaultAuthDir();
+  const authDir = options.authDir || defaultAuthDir(env);
   const capturePath =
     options.capturePath || env.DEEPSEEK_FINGERPRINT_PATH || path.join(authDir, "fingerprint.json");
   const devicePath =
     options.devicePath || env.DEEPSEEK_DEVICE_PATH || path.join(authDir, "device.json");
 
   let captured = null;
-  const inlineCapture = String(env.DEEPSEEK_FINGERPRINT_JSON || "").trim();
+  const inlineCapture = String(options.inlineCapture || env.DEEPSEEK_FINGERPRINT_JSON || "").trim();
   if (inlineCapture) {
     try {
       captured = { headers: sanitizeCapturedHeaders(JSON.parse(inlineCapture)).headers, source: "env" };
@@ -145,7 +145,14 @@ export function createHeaderLayer(options = {}) {
   }
   if (!captured) captured = loadCaptureFile(capturePath, readFile);
 
-  const device = resolveDeviceId({ devicePath, env, readFile, writeFile, log });
+  const device = resolveDeviceId({
+    deviceId: options.deviceId,
+    devicePath,
+    env,
+    readFile,
+    writeFile,
+    log,
+  });
 
   const fingerprint = buildFingerprint({
     userAgent: options.userAgent || env.DEEPSEEK_FINGERPRINT_UA,

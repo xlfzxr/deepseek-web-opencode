@@ -50,12 +50,9 @@ export function sseDone(res) {
 }
 
 export function openSse(res, options = {}) {
+  // Config layer injects heartbeatMs; the default keeps direct use sane.
   const heartbeatMs =
-    Number(options.heartbeatMs) > 0
-      ? Number(options.heartbeatMs)
-      : Number(process.env.DEEPSEEK_SSE_HEARTBEAT_MS) > 0
-        ? Number(process.env.DEEPSEEK_SSE_HEARTBEAT_MS)
-        : DEFAULT_HEARTBEAT_MS;
+    Number(options.heartbeatMs) > 0 ? Number(options.heartbeatMs) : DEFAULT_HEARTBEAT_MS;
   const retryMs = Number(options.retryMs) > 0 ? Number(options.retryMs) : 0;
   const initialComment =
     options.initialComment === undefined ? "connected" : options.initialComment;

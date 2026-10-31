@@ -26,23 +26,42 @@ Useful tool-calling patches on top of upstream:
 [opencode / any OpenAI client]
         |  SSE / JSON  (http://127.0.0.1:8787)
         v
-+----------------------------------------------------------+
-| src/server.mjs  (composition root: handlers + bootstrap)  |
-|   src/transport/        http · router · cors · sse-writer  |
-|   src/orchestration/    errors · events · session-store   |
-|                         auth-manager · pipeline · tool-loop|
-|   src/headers/          fingerprint · upstream · risk     |
-|   src/dsml.mjs          DSML/XML tool-call parser         |
-|   src/openai-shape.mjs  OpenAI prompt/item mapping        |
-|   src/deepseek-web-client.mjs  (PoW, adapter)             |
-+----------------------------------------------------------+
++-----------------------------------------------------------+
+| src/server.mjs  (composition root: bootstrap + routes)     |
+|   src/config.mjs         env -> injected config            |
+|   src/transport/         http · router · cors · sse-writer  |
+|                          openai-sse · openai-json           |
+|   src/orchestration/     events · errors · session-store    |
+|                          auth-manager · pipeline · tool-loop|
+|                          request-normalizer · tool-call-    |
+|                          registry · tool-parser ·           |
+|                          provider-client · fingerprint-     |
+|                          service                            |
+|   src/headers/           fingerprint · upstream · risk      |
+|   src/dsml.mjs           DSML/XML parser (shared leaf)      |
+|   src/openai-shape.mjs   OpenAI mapping (shared leaf)       |
+|   src/deepseek-web-client.mjs  (PoW, payload, adapter)      |
++-----------------------------------------------------------+
         |  CDP + web API
         v
    [DeepSeek Web chat.deepseek.com]
 ```
 
-Rule: **transport never calls the adapter directly** — only orchestration does.
-The adapter only *uses* the header layer; nothing else composes upstream headers.
+### Layers & contracts
+
+| Layer | Owns | Must not |
+|---|---|---|
+| transport | HTTP parsing, routing, CORS, SSE/JSON serialization | import the adapter or header layer, read env |
+| orchestration | auth/session lifecycle, pipelines, tool loop, normalization, error mapping | import transport, write HTTP directly |
+| provider adapter | DeepSeek HTTP calls, PoW, stream parsing, upstream error metadata | routing, SSE transport, orchestration |
+| header layer | fingerprint, same-origin, device identity, risk tokens | routing, business orchestration, arbitrary network calls |
+| config | env parsing, host/port, CORS origins, model list | business logic |
+| shared leaves | `dsml.mjs`, `openai-shape.mjs` | project imports |
+
+Dependency direction is **one way**: transport -> orchestration -> adapter -> header ->
+upstream. `src/server.mjs` is bootstrap + route wiring only. These rules are enforced
+statically by `npm run test:arch` (import graph + `process.env` + server size), so a file
+that bypasses a layer fails CI instead of silently growing a dependency.
 
 ## Header layer (fingerprint, same-origin, SSE)
 
@@ -125,15 +144,17 @@ the client disconnects. `sseWrite`/`sseEvent`/`sseDone` are no-ops after `end`.
 
 ```bash
 npm test               # everything below
-npm run smoke          # endpoints, auth-missing path, static serving
-npm run test:dsml      # DSML/XML/JSON parser variants
-npm run test:headers   # fingerprint, CORS/preflight, SSE framing, /api/fingerprint
-npm run test:toolcall  # chat + responses tool-call flow via fetch stub
+npm run smoke              # endpoints, auth-missing path, static serving
+npm run test:dsml          # DSML/XML/JSON parser variants
+npm run test:orchestration # normalization, error mapping, auth lifecycle, tool loop
+npm run test:arch          # import-graph/layer gates (static, no execution)
+npm run test:headers       # fingerprint, CORS/preflight, SSE framing, /api/fingerprint
+npm run test:toolcall      # chat + responses tool-call flow via fetch stub
 npm run test:live      # manual: real DeepSeek session (needs login + network)
 ```
 
 Tests need no credentials and no network: the tool-call suite stubs `fetch` and solves
-PoW locally. `test:live` is the exception — it talks to chat.deepseek.com to detect
+PoW locally, and the orchestration suite uses fake clients. `test:live` is the exception — it talks to chat.deepseek.com to detect
 upstream drift, so it needs a valid login and is **not** run in CI. CI
 (`.github/workflows/ci.yml`) runs `npm test` on every push.
 

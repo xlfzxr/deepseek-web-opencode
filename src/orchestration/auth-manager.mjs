@@ -1,7 +1,19 @@
 // Auth manager: caches a single DeepSeek client, dedupes concurrent creation, supports invalidation.
+import {
+  AUTH_PATH,
+  readCredentials,
+  runDeepSeekLogin,
+  summarizeCredentials,
+} from "../deepseek-auth.mjs";
 import { BridgeError, ErrorCode } from "./errors.mjs";
 
-export function createAuthManager({ loadCredentials, createClient }) {
+export function createAuthManager({
+  loadCredentials = readCredentials,
+  createClient,
+  runLogin = runDeepSeekLogin,
+  summarize = summarizeCredentials,
+  authPath = AUTH_PATH,
+} = {}) {
   let cached = null;
   let pending = null;
 
@@ -41,5 +53,28 @@ export function createAuthManager({ loadCredentials, createClient }) {
     return cached;
   }
 
-  return { getClient, invalidate, peek };
+  // Auth lifecycle: the composition root never calls deepseek-auth directly.
+  async function login(options = {}) {
+    const credentials = await runLogin(options);
+    invalidate();
+    return credentials;
+  }
+
+  function getCredentials() {
+    return loadCredentials();
+  }
+
+  async function describeCredentials() {
+    return summarize(await loadCredentials());
+  }
+
+  return {
+    getClient,
+    invalidate,
+    peek,
+    login,
+    getCredentials,
+    describeCredentials,
+    authPath,
+  };
 }
