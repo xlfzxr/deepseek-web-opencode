@@ -111,6 +111,18 @@ async function main() {
   const statusJson = await statusRes.json();
   check("GET /api/status -> 200", statusRes.status === 200 && "running" in statusJson);
 
+  const indexRes = await fetch(`${base}/`);
+  const indexHtml = await indexRes.text();
+  check(
+    "GET / -> static index.html",
+    indexRes.status === 200 &&
+      indexRes.headers.get("content-type").includes("text/html") &&
+      indexHtml.includes("<html"),
+  );
+
+  const missingRes = await fetch(`${base}/does-not-exist.txt`);
+  check("GET missing static path -> 404 JSON", missingRes.status === 404);
+
   server.close();
 }
 

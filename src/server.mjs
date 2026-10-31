@@ -1,4 +1,3 @@
-import { createReadStream, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -28,6 +27,8 @@ import { createAuthManager } from "./orchestration/auth-manager.mjs";
 import { createPipeline } from "./orchestration/pipeline.mjs";
 import { runToolLoop } from "./orchestration/tool-loop.mjs";
 import { createSessionStore } from "./orchestration/session-store.mjs";
+import { sendJson, readJsonBody } from "./transport/http.mjs";
+import { createRouter } from "./transport/router.mjs";
 import { sseWrite, sseEvent, sseDone } from "./transport/sse-writer.mjs";
 
 export { parseToolCallFromText };
@@ -85,54 +86,6 @@ function pushLog(message, level = "info") {
   console.log(`[ui] ${message}`);
 }
 
-function sendJson(res, status, payload) {
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  res.end(JSON.stringify(payload));
-}
-
-function notFound(res) {
-  sendJson(res, 404, { error: "not_found" });
-}
-
-function contentTypeFor(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".html") return "text/html; charset=utf-8";
-  if (ext === ".css") return "text/css; charset=utf-8";
-  if (ext === ".js") return "text/javascript; charset=utf-8";
-  if (ext === ".json") return "application/json; charset=utf-8";
-  if (ext === ".png") return "image/png";
-  return "application/octet-stream";
-}
-
-function safePublicPath(urlPath) {
-  const pathname = urlPath === "/" ? "/index.html" : urlPath;
-  const decoded = decodeURIComponent(pathname);
-  const normalized = path.normalize(decoded).replace(/^(\.\.[/\\])+/, "");
-  const fullPath = path.join(PUBLIC_DIR, normalized);
-  if (!fullPath.startsWith(PUBLIC_DIR)) {
-    return null;
-  }
-  return fullPath;
-}
-
-async function readJsonBody(req, maxBytes = 2_000_000) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > maxBytes) {
-      throw new Error("请求体太大");
-    }
-    chunks.push(chunk);
-  }
-  if (chunks.length === 0) return {};
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw.trim()) return {};
-  return JSON.parse(raw);
-}
 
 async function statusPayload() {
   const credentials = await readCredentials();
@@ -818,70 +771,23 @@ async function handleChatTest(req, res) {
   });
 }
 
-async function handleRequest(req, res) {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
-  if (req.method === "GET" && url.pathname === "/api/status") {
-    sendJson(res, 200, await statusPayload());
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/events") {
-    await handleSse(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/login") {
-    await startLogin(res);
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/chat-test") {
-    await handleChatTest(req, res);
-    return;
-  }
-
-  if (req.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
-    sendJson(res, 200, modelPayload());
-    return;
-  }
-
-  if (
-    req.method === "POST" &&
-    (url.pathname === "/v1/chat/completions" || url.pathname === "/chat/completions")
-  ) {
-    await handleChatCompletions(req, res);
-    return;
-  }
-
-  if (req.method === "POST" && (url.pathname === "/v1/responses" || url.pathname === "/responses")) {
-    await handleResponses(req, res);
-    return;
-  }
-
-  if (req.method !== "GET") {
-    sendJson(res, 405, { error: "method_not_allowed" });
-    return;
-  }
-
-  if (url.pathname === "/favicon.ico") {
-    res.writeHead(204, { "cache-control": "no-store" });
-    res.end();
-    return;
-  }
-
-  const filePath = safePublicPath(url.pathname);
-  if (!filePath || !existsSync(filePath)) {
-    notFound(res);
-    return;
-  }
-
-  res.writeHead(200, {
-    "content-type": contentTypeFor(filePath),
-    "cache-control": "no-store",
-  });
-  createReadStream(filePath).pipe(res);
-}
+const handleRequest = createRouter({
+  publicDir: PUBLIC_DIR,
+  handlers: {
+    status: async (req, res) => {
+      sendJson(res, 200, await statusPayload());
+    },
+    events: (req, res) => handleSse(req, res),
+    login: (req, res) => startLogin(res),
+    chatTest: (req, res) => handleChatTest(req, res),
+    models: (req, res) => {
+      sendJson(res, 200, modelPayload());
+    },
+    chatCompletions: (req, res) => handleChatCompletions(req, res),
+    responses: (req, res) => handleResponses(req, res),
+  },
+});
 
 export async function startServer(port = Number(process.env.PORT || DEFAULT_UI_PORT)) {
   try {
