@@ -3,6 +3,17 @@
 ## Unreleased
 
 - Add manual `npm run test:live` to verify the real DeepSeek session and catch upstream drift.
+- Add `src/headers/` header layer: fingerprint derived from the login UA (client hints,
+  same-origin Origin/Referer, sec-fetch, x-client-*), persisted `x-device-id`, and
+  `x-hif-*` risk-token cache with TTL + single-flight + soft failure.
+- Add `scripts/fingerprint-from-capture.mjs` (`npm run fingerprint:capture`) to replay an
+  exact sanitized browser capture; `GET /api/fingerprint` shows the resolved headers.
+- Add local CORS policy with real `OPTIONS` preflight handling and JSON `403` for
+  disallowed origins (`DEEPSEEK_BRIDGE_ALLOW_ORIGINS`).
+- Harden SSE: `no-transform`, `x-accel-buffering: no`, eager header flush, `retry:` hint,
+  heartbeats, write guards, and upstream cancellation on client disconnect.
+- Add `npm run test:headers` covering fingerprint coherence, CORS, SSE framing, and the
+  debug endpoint.
 
 ## 0.2.0 — 2026-10-31
 

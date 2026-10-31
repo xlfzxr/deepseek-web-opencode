@@ -36,5 +36,10 @@ export function createAuthManager({ loadCredentials, createClient }) {
     pending = null;
   }
 
-  return { getClient, invalidate };
+  // Non-creating accessor for status/debug endpoints.
+  function peek() {
+    return cached;
+  }
+
+  return { getClient, invalidate, peek };
 }

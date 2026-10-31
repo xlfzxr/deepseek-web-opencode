@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import { SHA3_WASM_B64 } from "./deepseek-pow-wasm.mjs";
+import { ENDPOINTS, createHeaderLayer } from "./headers/upstream.mjs";
 
 const DEEPSEEK_BASE_URL = "https://chat.deepseek.com";
 const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 let wasmInstancePromise = null;
 
@@ -29,42 +30,66 @@ async function loadDeepSeekHashWasm() {
   return wasmInstancePromise;
 }
 
+function upstreamError(label, res, detail) {
+  const body = String(detail || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const hint =
+    res.status === 403 || res.status === 429 || /^\s*</.test(body)
+      ? "（疑似被 WAF 拦截：检查 /api/fingerprint 的 warnings，并用 `npm run fingerprint:capture` 导入浏览器原始头）"
+      : "";
+  return new Error(`${label}：HTTP ${res.status}${hint}${body ? ` ${body}` : ""}`);
+}
+
 export class DeepSeekWebClient {
   constructor(options = {}) {
     this.cookie = options.cookie || "";
     this.bearer = options.bearer || "";
     this.userAgent = options.userAgent || DEFAULT_USER_AGENT;
+    // One header layer per client: it owns the fingerprint, device id and risk cache.
+    this.headerLayer =
+      options.headerLayer ||
+      createHeaderLayer({
+        cookie: this.cookie,
+        bearer: this.bearer,
+        userAgent: this.userAgent,
+        capturePath: options.capturePath,
+        devicePath: options.devicePath,
+        env: options.env,
+        log: options.log,
+      });
+    this.userAgent = this.headerLayer.fingerprint.userAgent;
   }
 
-  async fetchHeaders() {
-    return {
-      Cookie: this.cookie,
-      "User-Agent": this.userAgent,
-      Accept: "*/*",
-      ...(this.bearer ? { Authorization: `Bearer ${this.bearer}` } : {}),
-      Referer: `${DEEPSEEK_BASE_URL}/`,
-      "x-client-platform": "web",
-      "x-client-version": "2.7.0",
-      "x-client-locale": "en_US",
-      "x-client-timezone-offset": "25200",
-    };
+  // Endpoint-aware headers; kept async so existing call sites stay unchanged.
+  async fetchHeaders(endpoint = ENDPOINTS.settings, extra = {}) {
+    return this.headerLayer.forEndpoint(endpoint, extra);
+  }
+
+  async refreshRiskHeaders() {
+    return this.headerLayer.refreshRiskHeaders();
+  }
+
+  describeFingerprint() {
+    return this.headerLayer.describe();
   }
 
   async init() {
+    await this.refreshRiskHeaders();
     await fetch(`${DEEPSEEK_BASE_URL}/api/v0/client/settings?did=&scope=banner`, {
-      headers: await this.fetchHeaders(),
+      headers: await this.fetchHeaders(ENDPOINTS.settings, { method: "GET" }),
     }).catch(() => null);
   }
 
-  async createPowChallenge(targetPath) {
-    const res = await fetch(`${DEEPSEEK_BASE_URL}/api/v0/chat/create_pow_challenge`, {
+  async createPowChallenge(targetPath, signal) {
+    await this.refreshRiskHeaders();
+    const res = await fetch(`${DEEPSEEK_BASE_URL}${ENDPOINTS.powChallenge}`, {
       method: "POST",
-      headers: { ...(await this.fetchHeaders()), "Content-Type": "application/json" },
+      headers: await this.fetchHeaders(ENDPOINTS.powChallenge),
       body: JSON.stringify({ target_path: targetPath }),
+      signal,
     });
 
     if (!res.ok) {
-      throw new Error(`创建 DeepSeek PoW 失败：${res.status} ${await res.text()}`);
+      throw upstreamError("创建 DeepSeek PoW 失败", res, await res.text());
     }
 
     const data = await res.json();
@@ -136,16 +161,18 @@ export class DeepSeekWebClient {
     throw new Error(`不支持的 DeepSeek PoW 算法：${algorithm}`);
   }
 
-  async createChatSession() {
-    const targetPath = "/api/v0/chat_session/create";
+  async createChatSession(signal) {
+    const targetPath = ENDPOINTS.createSession;
+    await this.refreshRiskHeaders();
     const res = await fetch(`${DEEPSEEK_BASE_URL}${targetPath}`, {
       method: "POST",
-      headers: { ...(await this.fetchHeaders()), "Content-Type": "application/json" },
+      headers: await this.fetchHeaders(targetPath),
       body: JSON.stringify({}),
+      signal,
     });
 
     if (!res.ok) {
-      throw new Error(`创建 DeepSeek 会话失败：${res.status} ${await res.text()}`);
+      throw upstreamError("创建 DeepSeek 会话失败", res, await res.text());
     }
 
     const data = await res.json();
@@ -161,8 +188,8 @@ export class DeepSeekWebClient {
   }
 
   async chatCompletions(params) {
-    const targetPath = "/api/v0/chat/completion";
-    const challenge = await this.createPowChallenge(targetPath);
+    const targetPath = ENDPOINTS.completion;
+    const challenge = await this.createPowChallenge(targetPath, params.signal);
     const answer = await this.solvePow(challenge);
     const powResponse = Buffer.from(
       JSON.stringify({
@@ -175,14 +202,11 @@ export class DeepSeekWebClient {
       }),
     ).toString("base64");
 
+    await this.refreshRiskHeaders();
     const model = normalizeModel(params.model);
     const res = await fetch(`${DEEPSEEK_BASE_URL}${targetPath}`, {
       method: "POST",
-      headers: {
-        ...(await this.fetchHeaders()),
-        "Content-Type": "application/json",
-        "x-ds-pow-response": powResponse,
-      },
+      headers: await this.fetchHeaders(targetPath, { powResponse }),
       body: JSON.stringify({
         chat_session_id: params.sessionId,
         parent_message_id: params.parentMessageId ?? null,
@@ -316,9 +340,10 @@ export async function* parseDeepSeekStream(stream) {
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
-      if (!line.startsWith("data: ")) continue;
+      // SSE allows both "data: {...}" and "data:{...}".
+      if (!line.startsWith("data:")) continue;
 
-      const payload = line.slice(6).trim();
+      const payload = line.slice(5).trim();
       if (!payload || payload === "[DONE]") continue;
 
       try {
@@ -333,8 +358,8 @@ export async function* parseDeepSeekStream(stream) {
   }
 
   const tail = buffer.trim();
-  if (tail.startsWith("data: ")) {
-    const payload = tail.slice(6).trim();
+  if (tail.startsWith("data:")) {
+    const payload = tail.slice(5).trim();
     if (payload && payload !== "[DONE]") {
       try {
         const data = JSON.parse(payload);

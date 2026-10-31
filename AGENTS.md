@@ -27,10 +27,11 @@ tanpa mengubah perilaku eksternal (endpoint, format SSE/JSON, header).
 ### Arsitektur Target (C4 Level 2)
 
 ```ascii
-[Transport src/transport/ (HTTP/SSE, router, static)]
+[Transport src/transport/ (HTTP/SSE, CORS, router, static)]
       -> [Orchestration src/orchestration/ (events, errors, session-store,
           auth-manager, pipeline, tool-loop)]
-      -> [Adapter src/deepseek-web-client.mjs (PoW, header, payload)]
+      -> [Adapter src/deepseek-web-client.mjs (PoW, payload)]
+      -> [Header layer src/headers/ (fingerprint, upstream, risk)]
       -> [DeepSeek Web / Chrome via CDP]
 ```
 
@@ -38,6 +39,8 @@ Aturan panah (WAJIB):
 - **Transport** hanya tahu HTTP/SSE. Tidak pernah memanggil adapter langsung.
 - **Orchestration** tahu alur (Auth -> Session -> Stream -> Tools).
 - **Adapter** satu-satunya yang bicara dengan DeepSeek Web / Chrome.
+- **Header layer** (`src/headers/`) hanya menyusun header upstream (fingerprint,
+  same-origin, x-hif-*) dan tidak melakukan I/O jaringan selain risk cache.
 - Modul leaf (`events.mjs`, `errors.mjs`, `session-store.mjs`,
   `deepseek-pow-wasm.mjs`) tidak boleh mengimport modul proyek lain.
 - Pelanggaran panah = bug arsitektur: laporkan, jangan perbaiki diam-diam.

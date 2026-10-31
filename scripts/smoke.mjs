@@ -2,10 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-process.env.DEEPSEEK_AUTH_PATH = path.join(
-  mkdtempSync(path.join(tmpdir(), "ds-bridge-smoke-")),
-  "credentials.json",
-);
+const smokeDir = mkdtempSync(path.join(tmpdir(), "ds-bridge-smoke-"));
+process.env.DEEPSEEK_AUTH_PATH = path.join(smokeDir, "credentials.json");
+process.env.DEEPSEEK_AUTH_DIR = smokeDir;
+process.env.DEEPSEEK_RISK_HEADERS = "0";
 
 const { startServer } = await import("../src/server.mjs");
 const { createSessionStore } = await import("../src/orchestration/session-store.mjs");
