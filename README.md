@@ -46,10 +46,13 @@ npm test               # everything below
 npm run smoke          # endpoints, auth-missing path, static serving
 npm run test:dsml      # DSML/XML/JSON parser variants
 npm run test:toolcall  # chat + responses tool-call flow via fetch stub
+npm run test:live      # manual: real DeepSeek session (needs login + network)
 ```
 
 Tests need no credentials and no network: the tool-call suite stubs `fetch` and solves
-PoW locally. CI (`.github/workflows/ci.yml`) runs `npm test` on every push.
+PoW locally. `test:live` is the exception — it talks to chat.deepseek.com to detect
+upstream drift, so it needs a valid login and is **not** run in CI. CI
+(`.github/workflows/ci.yml`) runs `npm test` on every push.
 
 ## Quick start
 

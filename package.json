@@ -10,7 +10,8 @@
     "smoke": "node --require ./src/android-preload.cjs scripts/smoke.mjs",
     "test:dsml": "node --require ./src/android-preload.cjs scripts/test-dsml.mjs",
     "test": "npm run smoke && npm run test:dsml && npm run test:toolcall",
-    "test:toolcall": "node --require ./src/android-preload.cjs scripts/test-tool-call.mjs"
+    "test:toolcall": "node --require ./src/android-preload.cjs scripts/test-tool-call.mjs",
+    "test:live": "node --require ./src/android-preload.cjs scripts/live-check.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.54.2"

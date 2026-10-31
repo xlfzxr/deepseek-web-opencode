@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add manual `npm run test:live` to verify the real DeepSeek session and catch upstream drift.
+
 ## 0.2.0 — 2026-10-31
 
 - Split DSML/XML tool-call parsing into `src/dsml.mjs`.
