@@ -1,6 +1,7 @@
 // Pipeline: menjalankan satu chat completion DeepSeek Web dan melemparkan event internal.
 import { parseDeepSeekStream } from "./../deepseek-web-client.mjs";
 import { evMeta, evText, evReasoning, evDone } from "./events.mjs";
+import { BridgeError, ErrorCode } from "./errors.mjs";
 
 export function createPipeline({ authManager, sessionStore, log = () => {}, defaultModel = "deepseek-web/deepseek-chat" }) {
   async function ensureSession(client, sessionKey) {
@@ -19,7 +20,7 @@ export function createPipeline({ authManager, sessionStore, log = () => {}, defa
       const prompt = normalized.prompt || "";
 
       if (!prompt.trim()) {
-        throw new Error("没有可发送给 DeepSeek 的消息。");
+        throw new BridgeError(ErrorCode.INVALID_REQUEST, "没有可发送给 DeepSeek 的消息。");
       }
 
       const client = await authManager.getClient(signal);

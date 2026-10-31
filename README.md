@@ -24,10 +24,12 @@ Useful tool-calling patches on top of upstream:
         |  SSE / JSON  (http://127.0.0.1:8787)
         v
 +----------------------------------------------------------+
-| server.mjs  (HTTP router + OpenAI shape mapping)          |
-|   src/transport/        SSE writer                        |
+| src/server.mjs  (composition root: handlers + bootstrap)  |
+|   src/transport/        http · router · sse-writer        |
 |   src/orchestration/    errors · events · session-store   |
 |                         auth-manager · pipeline · tool-loop|
+|   src/dsml.mjs          DSML/XML tool-call parser         |
+|   src/openai-shape.mjs  OpenAI prompt/item mapping        |
 |   src/deepseek-web-client.mjs  (PoW, headers, adapter)    |
 +----------------------------------------------------------+
         |  CDP + web API
@@ -36,6 +38,18 @@ Useful tool-calling patches on top of upstream:
 ```
 
 Rule: **transport never calls the adapter directly** — only orchestration does.
+
+## Testing
+
+```bash
+npm test               # everything below
+npm run smoke          # endpoints, auth-missing path, static serving
+npm run test:dsml      # DSML/XML/JSON parser variants
+npm run test:toolcall  # chat + responses tool-call flow via fetch stub
+```
+
+Tests need no credentials and no network: the tool-call suite stubs `fetch` and solves
+PoW locally. CI (`.github/workflows/ci.yml`) runs `npm test` on every push.
 
 ## Quick start
 

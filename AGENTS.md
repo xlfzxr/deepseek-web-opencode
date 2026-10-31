@@ -68,7 +68,8 @@ Berhenti. Tulis: `BLOCKED: <pertanyaan spesifik>`. Jangan improvisasi.
 
 ## 3. Verifikasi Standar (Termux / Android)
 
-Tidak ada test suite. Verifikasi per task:
+`npm test` menjalankan smoke + DSML + tool-call tests (tanpa kredensial/jaringan).
+Verifikasi per task tetap:
 
 ```bash
 # 1. syntax check (wajib untuk tiap file yang dibuat/diubah)
@@ -382,7 +383,9 @@ Jika blocked: tambahkan `BLOCKED: <pertanyaan>`.
 - `runDeepSeekCompletion` tidak ada.
 - `src/orchestration/` berisi: `errors`, `events`, `session-store`,
   `auth-manager`, `pipeline`, `tool-loop`.
-- `src/transport/sse-writer.mjs` ada dan dipakai `src/server.mjs`.
+- `src/transport/` berisi `http.mjs`, `router.mjs`, `sse-writer.mjs`;
+  `src/dsml.mjs` dan `src/openai-shape.mjs` ada dan dipakai `src/server.mjs`.
+- `npm test` lulus (smoke + dsml + toolcall).
 - Semua endpoint lama jalan: status, models, chat, responses, chat-test, login.
 - `src/deepseek-pow-wasm.mjs`, `src/deepseek-auth.mjs`,
   `src/deepseek-web-client.mjs` tidak berubah (cek `git diff`).

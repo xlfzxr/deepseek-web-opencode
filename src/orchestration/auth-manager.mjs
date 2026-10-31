@@ -1,4 +1,6 @@
 // Auth manager: caches a single DeepSeek client, dedupes concurrent creation, supports invalidation.
+import { BridgeError, ErrorCode } from "./errors.mjs";
+
 export function createAuthManager({ loadCredentials, createClient }) {
   let cached = null;
   let pending = null;
@@ -10,7 +12,7 @@ export function createAuthManager({ loadCredentials, createClient }) {
     const load = (async () => {
       const credentials = await loadCredentials();
       if (!credentials?.cookie || !credentials?.bearer) {
-        throw new Error("还没有 DeepSeek 登录凭证，请先登录。");
+        throw new BridgeError(ErrorCode.AUTH_MISSING, "还没有 DeepSeek 登录凭证，请先登录。");
       }
       return createClient(credentials, signal);
     })();
