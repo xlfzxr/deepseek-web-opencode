@@ -1,0 +1,17 @@
+{
+  "name": "@deepseek-web-opencode/transport",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./cors": "./src/cors.mjs",
+    "./http": "./src/http.mjs",
+    "./openai-json": "./src/openai-json.mjs",
+    "./openai-sse": "./src/openai-sse.mjs",
+    "./router": "./src/router.mjs",
+    "./sse-writer": "./src/sse-writer.mjs"
+  },
+  "dependencies": {
+    "@deepseek-web-opencode/protocol": "0.2.0"
+  }
+}

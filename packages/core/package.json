@@ -1,0 +1,13 @@
+{
+  "name": "@deepseek-web-opencode/core",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./orchestration/*": "./src/orchestration/*.mjs"
+  },
+  "dependencies": {
+    "@deepseek-web-opencode/deepseek-web": "0.2.0",
+    "@deepseek-web-opencode/protocol": "0.2.0"
+  }
+}

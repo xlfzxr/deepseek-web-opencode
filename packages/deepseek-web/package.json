@@ -1,0 +1,20 @@
+{
+  "name": "@deepseek-web-opencode/deepseek-web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./android-preload": "./src/android-preload.cjs",
+    "./auth": "./src/deepseek-auth.mjs",
+    "./client": "./src/deepseek-web-client.mjs",
+    "./headers/fingerprint": "./src/headers/fingerprint.mjs",
+    "./headers/upstream": "./src/headers/upstream.mjs",
+    "./upstream-error": "./src/upstream-error.mjs"
+  },
+  "scripts": {
+    "capture:browser": "node --require ./src/android-preload.cjs scripts/capture-browser.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.54.2"
+  }
+}
