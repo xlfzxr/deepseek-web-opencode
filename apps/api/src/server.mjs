@@ -4,13 +4,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { publicDir as webPublicDir } from "@deepseek-web-opencode/web/assets";
-import { parseToolCallFromText } from "@deepseek-web-opencode/core/orchestration/tool-parser";
+import {
+  parseToolCallFromText,
+  parseToolCallsFromText,
+} from "@deepseek-web-opencode/core/orchestration/tool-parser";
 import { readConfig } from "./config.mjs";
 import { createCorsPolicy } from "@deepseek-web-opencode/transport/cors";
 import { createRouter } from "@deepseek-web-opencode/transport/router";
 import { createRuntime } from "./runtime.mjs";
 
-export { createRuntime, parseToolCallFromText };
+export { createRuntime, parseToolCallFromText, parseToolCallsFromText };
 
 const PUBLIC_DIR = webPublicDir;
 

@@ -1,13 +1,13 @@
 // Chat Completions handlers: normalize input and serialize chat JSON/SSE responses.
 import { normalizeChatRequest } from "@deepseek-web-opencode/core/orchestration/request-normalizer";
-import { parseToolCallFromText } from "@deepseek-web-opencode/core/orchestration/tool-parser";
+import { parseToolCallsFromText } from "@deepseek-web-opencode/core/orchestration/tool-parser";
 import { runToolLoop } from "@deepseek-web-opencode/core/orchestration/tool-loop";
 import { createRequestAbort, readJsonBody, sendJson } from "@deepseek-web-opencode/transport/http";
 import { chatCompletionJson } from "@deepseek-web-opencode/transport/openai-json";
-import { writeChatChunk, writeChatFinish, writeChatToolCall } from "@deepseek-web-opencode/transport/openai-sse";
+import { writeChatChunk, writeChatFinish, writeChatToolCalls } from "@deepseek-web-opencode/transport/openai-sse";
 import { openSse, sseDone } from "@deepseek-web-opencode/transport/sse-writer";
 
-export function createChatCompletionHandlers({ config, pipeline, pushLog }) {
+export function createChatCompletionHandlers({ config, pipeline, pushLog, recordToolTrace = async () => {} }) {
   async function streamChatCompletions(res, body, options = {}) {
     const normalized = normalizeChatRequest(body, { defaultModel: config.models[0] });
     const stream = openSse(res, { heartbeatMs: config.sse.heartbeatMs });
@@ -18,36 +18,30 @@ export function createChatCompletionHandlers({ config, pipeline, pushLog }) {
     const model = normalized.model;
     const ctx = { requestId, created, model };
 
-    let fullText = "";
     if (normalized.tools.length) {
+      const toolCalls = [];
       for await (const event of runToolLoop({
         pipeline,
         normalized,
         tools: normalized.tools,
         ctx,
         signal,
-        parseToolCall: parseToolCallFromText,
+        parseToolCall: parseToolCallsFromText,
+        log: pushLog,
+        recordTrace: recordToolTrace,
+        streamText: true,
       })) {
-        if (event.type === "text_delta" && event.delta) fullText += event.delta;
-        if (event.type !== "tool_call_done") continue;
-
-        writeChatToolCall(res, {
-          requestId,
-          created,
-          model,
-          toolCall: {
-            id: event.payload.id,
-            spec: event.payload.spec,
-            arguments: event.payload.arguments,
-          },
-        });
-        pushLog(`DeepSeek Web requested chat tool: ${event.payload.name}`);
+        if (event.type === "text_delta" && event.delta) {
+          writeChatChunk(res, { requestId, created, model, delta: { content: event.delta } });
+        }
+        if (event.type === "tool_call_done") toolCalls.push(event.payload);
+      }
+      if (toolCalls.length) {
+        writeChatToolCalls(res, { requestId, created, model, toolCalls });
+        for (const call of toolCalls) pushLog(`DeepSeek Web requested chat tool: ${call.name}`);
         sseDone(res);
         res.end();
         return;
-      }
-      if (fullText) {
-        writeChatChunk(res, { requestId, created, model, delta: { content: fullText } });
       }
     } else {
       for await (const event of pipeline.runChatCompletion(normalized, ctx, signal)) {
@@ -78,19 +72,32 @@ export function createChatCompletionHandlers({ config, pipeline, pushLog }) {
     const ctx = { requestId, created, model };
 
     let content = "";
-    for await (const event of pipeline.runChatCompletion(normalized, ctx, options.signal)) {
-      if (event.type === "text_delta" && event.delta) content += event.delta;
+    const toolCalls = [];
+    if (normalized.tools.length) {
+      for await (const event of runToolLoop({
+        pipeline,
+        normalized,
+        tools: normalized.tools,
+        ctx,
+        signal: options.signal,
+        parseToolCall: parseToolCallsFromText,
+        log: pushLog,
+        recordTrace: recordToolTrace,
+      })) {
+        if (event.type === "text_delta" && event.delta) content += event.delta;
+        if (event.type === "tool_call_done") toolCalls.push(event.payload);
+      }
+    } else {
+      for await (const event of pipeline.runChatCompletion(normalized, ctx, options.signal)) {
+        if (event.type === "text_delta" && event.delta) content += event.delta;
+      }
     }
-
-    const toolCall = normalized.tools.length
-      ? parseToolCallFromText(content, normalized.tools)
-      : null;
-    if (toolCall) pushLog(`DeepSeek Web requested chat tool: ${toolCall.spec.name}`);
+    for (const call of toolCalls) pushLog(`DeepSeek Web requested chat tool: ${call.spec.name}`);
 
     sendJson(
       res,
       200,
-      chatCompletionJson({ requestId, created, model, content, toolCall }),
+      chatCompletionJson({ requestId, created, model, content, toolCalls }),
     );
   }
 

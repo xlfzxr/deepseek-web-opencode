@@ -7,9 +7,10 @@ A local OpenAI-compatible bridge that wraps **chat.deepseek.com** web sessions i
 Forked and repositioned from [db9cd2fgbj-hash/codex-deepseek-bridge](https://github.com/db9cd2fgbj-hash/codex-deepseek-bridge).
 Useful tool-calling patches on top of upstream:
 
-- **Tolerant DSML tool-call parser** — DeepSeek V3.2/V4 models sometimes emit internal
-  `<｜DSML｜invoke…>` markup (double fullwidth pipes, parameters without prefix, missing wrapper).
-  The parser accepts these variants instead of only the canonical form.
+- **Prompt-driven DSML tool calling** — versioned prompt contract, tolerant multi-invoke and
+  incremental SSE parsing, canonical IR, OpenCode name/parameter aliases, schema-guided coercion,
+  nested reconstruction, and validation/repair. DSML is prompt-requested text, not native
+  function-calling.
 - **Header layer for WAF/fingerprint drift** — one coherent fingerprint derived from the
   login UA (client hints, same-origin `Origin`/`Referer`, `sec-fetch-*`, device id, fresh
   `x-hif-*` risk tokens), plus an importer for an exact browser capture.
@@ -43,10 +44,10 @@ The workspaces are named `@deepseek-web-opencode/api`, `@deepseek-web-opencode/w
 
 | Workspace | Owns | Depends on |
 |---|---|---|
-| `apps/api` | HTTP bootstrap, routes, runtime config, and login entrypoint | core, transport, provider, web assets |
+| `apps/api` | HTTP bootstrap, routes, runtime config, local trace/replay, and login entrypoint | core, transport, provider, web assets |
 | `apps/web` | Static dashboard assets | None; the API serves these files |
-| `packages/core` | auth/session lifecycle, request normalization, pipeline and tool loop | protocol, provider |
-| `packages/protocol` | DSML parsing and OpenAI shape mapping | Node.js only |
+| `packages/core` | auth/session lifecycle, request normalization, DSML mapping/coercion, schema validation and repair | protocol, provider |
+| `packages/protocol` | DSML prompt/parser/IR and OpenAI shape mapping | Node.js only |
 | `packages/transport` | HTTP helpers, CORS, routing, SSE and OpenAI serialization | protocol |
 | `packages/deepseek-web` | DeepSeek Web auth/client, PoW, fingerprints and risk headers | `playwright-core` |
 
@@ -54,6 +55,21 @@ Dependency direction is one-way: API -> core -> provider; API also wires transpo
 while core and transport depend on protocol. API serves the static files exported by `apps/web`;
 web and provider do not depend on the API or orchestration. Each workspace exposes its public
 modules through `package.json` exports, while the root package owns common npm commands.
+
+## Tool-call contract
+
+The system prompt specifies the canonical DSML syntax in `prompts/dsml-spec.md` and renders
+it together with the request's actual tool schemas. When the bridge builds this prompt, its
+version and SHA-256 are included in the bridge log. Parsed invokes retain a canonical IR, are mapped to
+the client's declared names/parameters, and support multiple calls in one model response.
+For SSE tool requests, the incremental parser streams ordinary text eagerly but holds complete
+invoke blocks until schema validation and any required repair are finished.
+
+See [`docs/mapping.md`](./docs/mapping.md) for current aliases and coercion behavior, and
+[`roadmap.md`](./roadmap.md) for phase status. The prompt, parser, IR, mapping/coercion,
+JSON Schema validation, bounded repair, and local raw-output trace/replay are implemented.
+Real-output fixtures, parser fuzzing, per-tool alerting, and provider adapters are still pending.
+This remains prompt-driven and best-effort, not native function-calling.
 
 ## Header layer (fingerprint, same-origin, SSE)
 
@@ -128,6 +144,8 @@ the client disconnects. `sseWrite`/`sseEvent`/`sseDone` are no-ops after `end`.
 | `DEEPSEEK_CDP_PORT` | `9222` | browser remote-debugging port |
 | `DEEPSEEK_LOGIN_TIMEOUT_MS` | `300000` | maximum time to capture login credentials |
 | `DEEPSEEK_BROWSER` | auto-detected | explicit Chrome/Edge executable path |
+| `DEEPSEEK_TOOL_TRACE` | `1` | set `0` to disable local raw tool-output traces |
+| `DEEPSEEK_TOOL_TRACE_DIR` | `.deepseek-tool-traces` | JSONL trace directory (repository-root relative) |
 | `DEEPSEEK_FINGERPRINT_PATH` | `.deepseek-auth/fingerprint.json` | exact capture to replay |
 | `DEEPSEEK_FINGERPRINT_JSON` | – | inline capture JSON (same shape as the file) |
 | `DEEPSEEK_FINGERPRINT_UA` | login UA | override the UA used for derivation |
@@ -139,7 +157,9 @@ the client disconnects. `sseWrite`/`sseEvent`/`sseDone` are no-ops after `end`.
 | `DEEPSEEK_RISK_TTL_MS` / `_RETRY_MS` / `_TIMEOUT_MS` | `600000` / `60000` / `4000` | risk token cache tuning |
 
 Relative file paths are resolved from the repository root, independent of the workspace
-that runs the command.
+that runs the command. DSML traces include raw model output and tool schemas; they are stored
+locally in a git-ignored directory (mode `0700`/`0600` on POSIX, where supported). Disable
+them with `DEEPSEEK_TOOL_TRACE=0`. Replay a request with `npm run replay -- <request_id>`.
 
 ## Quick start
 
@@ -203,7 +223,7 @@ repository root; individual workspaces can also be selected with `npm --workspac
 ## Scope & notes
 
 - This is a local bridge over the DeepSeek **web** session — not the official DeepSeek API.
-- Tool calling relies on prompt-driven `<tool_call>` / DSML output parsed by the gateway;
-  stability differs from native function-calling models.
+- Tool calling is prompt-driven DSML, not native function-calling. Parsing, mapping, validation,
+  and repair are best-effort and depend on the live model following the prompt.
 - Non-commercial license inherited from upstream — see [LICENSE](./LICENSE) and the
   original README preserved in [`UPSTREAM_README.md`](./UPSTREAM_README.md).

@@ -7,7 +7,8 @@
     "prelogin": "node scripts/ensure-adb.mjs",
     "login": "node --require @deepseek-web-opencode/deepseek-web/android-preload src/login.mjs",
     "start": "node --require @deepseek-web-opencode/deepseek-web/android-preload src/server.mjs",
-    "fingerprint:capture": "node scripts/fingerprint-from-capture.mjs"
+    "fingerprint:capture": "node scripts/fingerprint-from-capture.mjs",
+    "replay": "node scripts/replay-tool-trace.mjs"
   },
   "dependencies": {
     "@deepseek-web-opencode/core": "0.2.0",

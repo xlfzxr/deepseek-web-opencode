@@ -4,7 +4,7 @@
 // pure (injected lookups only) so the transport layer never needs to know prompt formats.
 
 import {
-  buildToolPrompt,
+  buildToolPromptSpec,
   chatCompletionsToPrompt,
   extractChatTools,
   extractResponseTools,
@@ -75,9 +75,9 @@ export function responsesToPrompt(body = {}, options = {}) {
     parts.push(`system: ${instructions.trim()}`);
   }
 
-  const toolPrompt = buildToolPrompt(tools);
-  if (toolPrompt) {
-    parts.push(toolPrompt);
+  const toolPromptSpec = options.toolPromptSpec || buildToolPromptSpec(tools);
+  if (toolPromptSpec.text) {
+    parts.push(toolPromptSpec.text);
   }
 
   if (typeof body.input === "string") {
@@ -93,21 +93,29 @@ export function responsesToPrompt(body = {}, options = {}) {
 }
 
 export function normalizeChatRequest(body = {}, { defaultModel } = {}) {
+  const tools = extractChatTools(body);
+  const toolPromptSpec = buildToolPromptSpec(tools);
+  const usesToolPrompt = tools.length > 0 && !body.prompt;
   return {
     sessionKey: sessionKeyFromBody(body),
     model: body.model || defaultModel,
-    prompt: body.prompt || chatCompletionsToPrompt(body),
+    prompt: body.prompt || chatCompletionsToPrompt(body, tools, toolPromptSpec),
+    promptVersion: usesToolPrompt ? toolPromptSpec.version : null,
+    promptHash: usesToolPrompt ? toolPromptSpec.hash : null,
     searchEnabled: Boolean(body.search_enabled),
-    tools: extractChatTools(body),
+    tools,
   };
 }
 
 export function normalizeResponsesRequest(body = {}, options = {}) {
   const tools = extractResponseTools(body);
+  const toolPromptSpec = buildToolPromptSpec(tools);
   return {
     sessionKey: responsesSessionKeyFromBody(body, options.lookupSession),
     model: body.model || options.defaultModel,
-    prompt: responsesToPrompt(body, { ...options, tools }),
+    prompt: responsesToPrompt(body, { ...options, tools, toolPromptSpec }),
+    promptVersion: tools.length ? toolPromptSpec.version : null,
+    promptHash: tools.length ? toolPromptSpec.hash : null,
     searchEnabled: Boolean(body.search_enabled),
     tools,
   };

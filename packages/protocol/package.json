@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     "./dsml": "./src/dsml.mjs",
-    "./openai-shape": "./src/openai-shape.mjs"
+    "./dsml-stream-parser": "./src/dsml-stream-parser.mjs",
+    "./openai-shape": "./src/openai-shape.mjs",
+    "./tool-call-ir": "./src/tool-call-ir.mjs"
   }
 }

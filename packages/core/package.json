@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@deepseek-web-opencode/deepseek-web": "0.2.0",
-    "@deepseek-web-opencode/protocol": "0.2.0"
+    "@deepseek-web-opencode/protocol": "0.2.0",
+    "ajv": "^8.20.0"
   }
 }

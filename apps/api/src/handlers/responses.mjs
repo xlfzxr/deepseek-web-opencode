@@ -1,6 +1,6 @@
 // Responses handlers: adapt normalized completions to Responses JSON/SSE events.
 import { normalizeResponsesRequest } from "@deepseek-web-opencode/core/orchestration/request-normalizer";
-import { parseToolCallFromText } from "@deepseek-web-opencode/core/orchestration/tool-parser";
+import { parseToolCallsFromText } from "@deepseek-web-opencode/core/orchestration/tool-parser";
 import { runToolLoop } from "@deepseek-web-opencode/core/orchestration/tool-loop";
 import { createRequestAbort, readJsonBody, sendJson } from "@deepseek-web-opencode/transport/http";
 import { responsesJson } from "@deepseek-web-opencode/transport/openai-json";
@@ -20,6 +20,7 @@ export function createResponsesHandlers({
   responseSessions,
   toolCalls,
   pushLog,
+  recordToolTrace = async () => {},
 }) {
   async function streamResponses(res, body, options = {}) {
     const normalized = normalizeResponsesRequest(body, {
@@ -40,6 +41,7 @@ export function createResponsesHandlers({
     writeResponseStart(res, responseId, model);
     let textStarted = false;
     let fullText = "";
+    const toolCallItems = [];
 
     const upstream = normalized.tools.length
       ? runToolLoop({
@@ -48,16 +50,30 @@ export function createResponsesHandlers({
           tools: normalized.tools,
           ctx,
           signal,
-          parseToolCall: parseToolCallFromText,
+          parseToolCall: parseToolCallsFromText,
+          log: pushLog,
+          recordTrace: recordToolTrace,
+          streamText: true,
         })
       : pipeline.runChatCompletion(normalized, ctx, signal);
 
     for await (const event of upstream) {
+      if (event.type === "tool_call_done") {
+        toolCallItems.push(event.payload);
+        continue;
+      }
       if (event.type !== "text_delta" && event.type !== "reasoning_delta") continue;
       const delta = event.delta ?? "";
       if (!delta) continue;
       if (normalized.tools.length) {
-        if (event.type === "text_delta") fullText += delta;
+        if (event.type === "text_delta") {
+          if (!textStarted) {
+            writeResponseTextStart(res, responseId);
+            textStarted = true;
+          }
+          fullText += delta;
+          writeResponseTextDelta(res, responseId, delta);
+        }
         continue;
       }
       if (event.type === "reasoning_delta") continue;
@@ -69,18 +85,19 @@ export function createResponsesHandlers({
       writeResponseTextDelta(res, responseId, delta);
     }
 
-    const toolCall = normalized.tools.length
-      ? parseToolCallFromText(fullText, normalized.tools)
-      : null;
-
     let output = [];
-    if (toolCall) {
-      output = [
-        writeResponseToolCall(res, responseId, toolCall, {
-          remember: (item) => toolCalls.remember(item),
-        }),
-      ];
-      pushLog(`DeepSeek Web requested tool: ${toolCall.spec.name}`);
+    if (toolCallItems.length) {
+      if (fullText) output.push(writeResponseTextDone(res, responseId, fullText));
+      for (const toolCall of toolCallItems) {
+        const outputIndex = output.length;
+        pushLog(`DeepSeek Web requested tool: ${toolCall.spec.name}`);
+        output.push(
+          writeResponseToolCall(res, responseId, toolCall, {
+            outputIndex,
+            remember: (item) => toolCalls.remember(item),
+          }),
+        );
+      }
     } else if (fullText) {
       if (!textStarted) {
         writeResponseTextStart(res, responseId);
@@ -109,13 +126,26 @@ export function createResponsesHandlers({
     responseSessions.set(responseId, normalized.sessionKey);
 
     let content = "";
-    for await (const event of pipeline.runChatCompletion(normalized, ctx, options.signal)) {
-      if (event.type === "text_delta" && event.delta) content += event.delta;
+    const parsedToolCalls = [];
+    if (normalized.tools.length) {
+      for await (const event of runToolLoop({
+        pipeline,
+        normalized,
+        tools: normalized.tools,
+        ctx,
+        signal: options.signal,
+        parseToolCall: parseToolCallsFromText,
+        log: pushLog,
+        recordTrace: recordToolTrace,
+      })) {
+        if (event.type === "text_delta" && event.delta) content += event.delta;
+        if (event.type === "tool_call_done") parsedToolCalls.push(event.payload);
+      }
+    } else {
+      for await (const event of pipeline.runChatCompletion(normalized, ctx, options.signal)) {
+        if (event.type === "text_delta" && event.delta) content += event.delta;
+      }
     }
-
-    const toolCall = normalized.tools.length
-      ? parseToolCallFromText(content, normalized.tools)
-      : null;
 
     sendJson(
       res,
@@ -124,7 +154,7 @@ export function createResponsesHandlers({
         responseId,
         model,
         content,
-        toolCall,
+        toolCalls: parsedToolCalls,
         remember: (item) => toolCalls.remember(item),
       }),
     );

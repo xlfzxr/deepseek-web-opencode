@@ -5,12 +5,12 @@ This repository is an npm-workspaces monorepo for the DeepSeek Web OpenCode brid
 ## Workspace map
 
 - `apps/api/` — HTTP bootstrap (`src/server.mjs`), runtime composition, route handlers,
-  runtime configuration, login entrypoint, and Android helper scripts.
+  runtime configuration, local DSML trace persistence/replay, login entrypoint, and Android helpers.
 - `apps/web/` — static dashboard assets. The API serves this workspace's public directory.
 - `packages/transport/` — HTTP helpers, CORS, routing, SSE framing, and OpenAI serialization.
 - `packages/core/` — request normalization, auth/session orchestration, completion pipeline,
-  and tool-call flow.
-- `packages/protocol/` — dependency-free DSML parsing and OpenAI request/response shaping.
+  DSML mapping/coercion, schema validation, repair, and tool-call flow.
+- `packages/protocol/` — dependency-free DSML prompt/parser/IR and OpenAI request/response shaping.
 - `packages/deepseek-web/` — DeepSeek Web authentication/client, PoW, fingerprints, and
   upstream headers. Credentials and browser profile remain in the repository-root
   `.deepseek-auth/` and `.deepseek-browser-profile/` directories.
@@ -41,9 +41,11 @@ packages/core ──────────────────────
 
 - Use ESM for JavaScript modules and keep workspace-relative runtime data rooted at the
   repository root.
-- Do not commit `.deepseek-auth/`, `.deepseek-browser-profile/`, `.env` files, or generated
-  captures/credentials.
-- The automated test suite and its scripts were removed intentionally at the user's
-  request. Do not restore or add tests unless the user asks for them. When changing runtime
-  behavior, use syntax checks and manual endpoint verification during development.
+- Do not commit `.deepseek-auth/`, `.deepseek-browser-profile/`, `.deepseek-tool-traces/`,
+  `.env` files, or generated captures/credentials.
+- The automated test suite and scripts were removed intentionally at the user's request. Do
+  not restore or add automated tests unless the user explicitly asks. The roadmap's fixture
+  and fuzz-test gates remain pending while that constraint stands. Any future DSML fixture
+  must be real, reviewed DeepSeek Web output, never hand-written. Use syntax/manual
+  verification without fabricating fixtures.
 - Avoid changing the embedded PoW WASM payload unless a task specifically requires it.

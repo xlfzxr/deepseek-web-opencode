@@ -92,6 +92,9 @@ export function createPipeline({
         throw mapUpstreamFailure(error, { phase: "session", signal });
       }
 
+      if (normalized.promptHash) {
+        log(`DSML prompt ${normalized.promptVersion} sha256=${normalized.promptHash} request=${ctx?.requestId || "unknown"}`);
+      }
       log(`发送到 DeepSeek Web：${prompt.slice(0, 60).replace(/\s+/g, " ")}`);
 
       let deepSeekStream;

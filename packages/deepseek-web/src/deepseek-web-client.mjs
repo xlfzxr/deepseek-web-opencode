@@ -390,6 +390,7 @@ export async function* parseDeepSeekStream(stream) {
     }
   }
 
+  buffer += decoder.decode();
   const tail = buffer.trim();
   if (tail.startsWith("data:")) {
     const payload = tail.slice(5).trim();

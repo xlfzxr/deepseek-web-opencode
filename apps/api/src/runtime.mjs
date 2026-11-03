@@ -15,6 +15,7 @@ import { createChatCompletionHandlers } from "./handlers/chat-completions.mjs";
 import { createErrorHandler } from "./handlers/errors.mjs";
 import { createResponsesHandlers } from "./handlers/responses.mjs";
 import { createSystemHandlers } from "./handlers/system.mjs";
+import { createToolTraceStore } from "./tool-trace-store.mjs";
 
 function nowStamp() {
   return new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -27,6 +28,7 @@ export function createRuntime(config = readConfig(), deps = {}) {
     logs: [],
     clients: new Set(),
   };
+  const toolTrace = deps.toolTrace || createToolTraceStore(config.toolTrace || { enabled: false });
 
   let listenPort = config.port;
   const chatSessions = createSessionStore();
@@ -46,6 +48,14 @@ export function createRuntime(config = readConfig(), deps = {}) {
       client.data(entry);
     }
     console.log(`[ui] ${message}`);
+  }
+
+  async function recordToolTrace(entry) {
+    const storedPath = await toolTrace.record(entry);
+    if (toolTrace.enabled && !storedPath) {
+      pushLog(`DSML trace persistence failed for request=${entry.requestId || "unknown"}`, "error");
+    }
+    return storedPath;
   }
 
   // Dependencies are injected at the composition root; production passes none.
@@ -92,13 +102,19 @@ export function createRuntime(config = readConfig(), deps = {}) {
       pushLog,
       getPort: () => listenPort,
     }),
-    ...createChatCompletionHandlers({ config, pipeline, pushLog }),
+    ...createChatCompletionHandlers({
+      config,
+      pipeline,
+      pushLog,
+      recordToolTrace,
+    }),
     ...createResponsesHandlers({
       config,
       pipeline,
       responseSessions,
       toolCalls,
       pushLog,
+      recordToolTrace,
     }),
   };
   const handleError = createErrorHandler({ state, pushLog });
@@ -109,6 +125,7 @@ export function createRuntime(config = readConfig(), deps = {}) {
     authManager,
     pipeline,
     fingerprint,
+    toolTrace,
     handlers,
     handleError,
     pushLog,

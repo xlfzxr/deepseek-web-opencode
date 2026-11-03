@@ -1,5 +1,6 @@
 .deepseek-auth/
 .deepseek-browser-profile/
+.deepseek-tool-traces/
 node_modules/
 _refs/
 .env
