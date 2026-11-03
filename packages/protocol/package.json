@@ -1,0 +1,10 @@
+{
+  "name": "@deepseek-web-opencode/protocol",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./dsml": "./src/dsml.mjs",
+    "./openai-shape": "./src/openai-shape.mjs"
+  }
+}

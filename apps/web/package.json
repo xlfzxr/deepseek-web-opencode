@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-web-opencode/web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./assets": "./src/assets.mjs"
+  }
+}

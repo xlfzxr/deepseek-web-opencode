@@ -24,7 +24,7 @@ Rules ( Indo ):
 1. SATU task per pemanggilan. Jangan gabung dua pekerjaan.
 2. Baseline dirty diizinkan jika instruksi menyatakan "baseline dirty diizinkan".
 3. Setiap file baru: ESM, header komentar 1 baris.
-4. Verifikasi selalu: `node --check <file>` lalu smoke endpoint yang disebut.
+4. Verifikasi selalu: `node --check <file>` lalu cek endpoint terkait secara manual.
 5. Laporkan dengan format:
    ```
    TASK: <lulus|gagal|blocked>
