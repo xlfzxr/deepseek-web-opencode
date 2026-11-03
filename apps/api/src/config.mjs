@@ -99,5 +99,12 @@ export function readConfig(env = process.env) {
       ),
       browser: env.DEEPSEEK_BROWSER || "",
     },
+    toolTrace: {
+      enabled: flagEnabled(env.DEEPSEEK_TOOL_TRACE, true),
+      dir: pathFromRoot(
+        env.DEEPSEEK_TOOL_TRACE_DIR,
+        path.join(MONOREPO_ROOT, ".deepseek-tool-traces"),
+      ),
+    },
   };
 }

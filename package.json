@@ -12,6 +12,7 @@
     "login": "npm run login --workspace=@deepseek-web-opencode/api --ignore-scripts",
     "start": "npm run start --workspace=@deepseek-web-opencode/api",
     "fingerprint:capture": "npm run fingerprint:capture --workspace=@deepseek-web-opencode/api --",
-    "capture:browser": "npm run capture:browser --workspace=@deepseek-web-opencode/deepseek-web --"
+    "capture:browser": "npm run capture:browser --workspace=@deepseek-web-opencode/deepseek-web --",
+    "replay": "npm run replay --workspace=@deepseek-web-opencode/api --"
   }
 }

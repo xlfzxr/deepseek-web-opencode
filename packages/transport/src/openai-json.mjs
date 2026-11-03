@@ -15,8 +15,9 @@ const ZERO_USAGE = Object.freeze({
   total_tokens: 0,
 });
 
-export function chatCompletionJson({ requestId, created, model, content, toolCall }) {
-  if (toolCall) {
+export function chatCompletionJson({ requestId, created, model, content, toolCall, toolCalls }) {
+  const calls = Array.isArray(toolCalls) ? toolCalls : toolCall ? [toolCall] : [];
+  if (calls.length) {
     return {
       id: requestId,
       object: "chat.completion",
@@ -28,7 +29,7 @@ export function chatCompletionJson({ requestId, created, model, content, toolCal
           message: {
             role: "assistant",
             content: null,
-            tool_calls: [makeChatToolCall(toolCall)],
+            tool_calls: calls.map((call, index) => makeChatToolCall(call, index)),
           },
           finish_reason: "tool_calls",
         },
@@ -53,19 +54,24 @@ export function chatCompletionJson({ requestId, created, model, content, toolCal
   };
 }
 
-export function responsesJson({ responseId, model, content, toolCall, remember }) {
-  if (toolCall) {
-    const itemId = `${responseId}_${toolCall.spec.kind === "custom" ? "ctc" : "fc"}`;
-    const callId = toolCall.id || `call_ds_${Date.now()}`;
-    const item = makeToolCallItem(
-      itemId,
-      "completed",
-      callId,
-      toolCall,
-      toolCall.arguments || (toolCall.spec.kind === "custom" ? "" : "{}"),
-    );
-    remember?.(item);
-    return makeResponseBase(responseId, model, "completed", [item]);
+export function responsesJson({ responseId, model, content, toolCall, toolCalls, remember }) {
+  const calls = Array.isArray(toolCalls) ? toolCalls : toolCall ? [toolCall] : [];
+  if (calls.length) {
+    const items = calls.map((call, index) => {
+      const prefix = call.spec.kind === "custom" ? "ctc" : "fc";
+      const itemId = `${responseId}_${prefix}_${index}`;
+      const callId = call.id || `call_ds_${Date.now()}_${index}`;
+      const item = makeToolCallItem(
+        itemId,
+        "completed",
+        callId,
+        call,
+        call.arguments || (call.spec.kind === "custom" ? "" : "{}"),
+      );
+      remember?.(item);
+      return item;
+    });
+    return makeResponseBase(responseId, model, "completed", items);
   }
 
   return makeResponseBase(responseId, model, "completed", [

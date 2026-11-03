@@ -20,8 +20,8 @@ export function writeChatChunk(res, { requestId, created, model, delta, finishRe
   });
 }
 
-export function makeChatToolCall(toolCall) {
-  const callId = toolCall.id || `call_ds_${Date.now()}`;
+export function makeChatToolCall(toolCall, index = 0) {
+  const callId = toolCall.id || `call_ds_${Date.now()}_${index}`;
   return {
     id: callId,
     type: "function",
@@ -32,27 +32,28 @@ export function makeChatToolCall(toolCall) {
   };
 }
 
-export function makeChatToolCallDelta(toolCall) {
-  const callId = toolCall.id || `call_ds_${Date.now()}`;
-  return [
-    {
-      index: 0,
-      id: callId,
-      type: "function",
-      function: {
-        name: toolCall.spec.name,
-        arguments: toolCall.arguments || "{}",
-      },
+export function makeChatToolCallDelta(toolCall, index = 0) {
+  const callId = toolCall.id || `call_ds_${Date.now()}_${index}`;
+  return {
+    index,
+    id: callId,
+    type: "function",
+    function: {
+      name: toolCall.spec.name,
+      arguments: toolCall.arguments || "{}",
     },
-  ];
+  };
 }
 
-export function writeChatToolCall(res, { requestId, created, model, toolCall }) {
+export function writeChatToolCalls(res, { requestId, created, model, toolCalls }) {
   writeChatChunk(res, {
     requestId,
     created,
     model,
-    delta: { role: "assistant", tool_calls: makeChatToolCallDelta(toolCall) },
+    delta: {
+      role: "assistant",
+      tool_calls: toolCalls.map((toolCall, index) => makeChatToolCallDelta(toolCall, index)),
+    },
   });
   return writeChatChunk(res, {
     requestId,
@@ -61,6 +62,10 @@ export function writeChatToolCall(res, { requestId, created, model, toolCall }) 
     delta: {},
     finishReason: "tool_calls",
   });
+}
+
+export function writeChatToolCall(res, options) {
+  return writeChatToolCalls(res, { ...options, toolCalls: [options.toolCall] });
 }
 
 export function writeChatFinish(res, { requestId, created, model, finishReason = "stop" }) {
@@ -130,17 +135,17 @@ export function writeResponseTextDone(res, responseId, text) {
   return item;
 }
 
-export function writeResponseToolCall(res, responseId, toolCall, { remember } = {}) {
+export function writeResponseToolCall(res, responseId, toolCall, { remember, outputIndex = 0 } = {}) {
   const itemIdPrefix = toolCall.spec.kind === "custom" ? "ctc" : "fc";
-  const itemId = `${responseId}_${itemIdPrefix}`;
-  const callId = toolCall.id || `call_ds_${Date.now()}`;
+  const itemId = `${responseId}_${itemIdPrefix}_${outputIndex}`;
+  const callId = toolCall.id || `call_ds_${Date.now()}_${outputIndex}`;
   const payload = toolCall.arguments || (toolCall.spec.kind === "custom" ? "" : "{}");
   const inProgressItem = makeToolCallItem(itemId, "in_progress", callId, toolCall, "");
   const completedItem = makeToolCallItem(itemId, "completed", callId, toolCall, payload);
 
   sseEvent(res, "response.output_item.added", {
     type: "response.output_item.added",
-    output_index: 0,
+    output_index: outputIndex,
     item: inProgressItem,
   });
 
@@ -149,14 +154,14 @@ export function writeResponseToolCall(res, responseId, toolCall, { remember } = 
       sseEvent(res, "response.custom_tool_call_input.delta", {
         type: "response.custom_tool_call_input.delta",
         item_id: itemId,
-        output_index: 0,
+        output_index: outputIndex,
         delta: payload,
       });
     }
     sseEvent(res, "response.custom_tool_call_input.done", {
       type: "response.custom_tool_call_input.done",
       item_id: itemId,
-      output_index: 0,
+      output_index: outputIndex,
       input: payload,
     });
   } else if (toolCall.spec.kind !== "tool_search") {
@@ -164,21 +169,21 @@ export function writeResponseToolCall(res, responseId, toolCall, { remember } = 
       sseEvent(res, "response.function_call_arguments.delta", {
         type: "response.function_call_arguments.delta",
         item_id: itemId,
-        output_index: 0,
+        output_index: outputIndex,
         delta: payload,
       });
     }
     sseEvent(res, "response.function_call_arguments.done", {
       type: "response.function_call_arguments.done",
       item_id: itemId,
-      output_index: 0,
+      output_index: outputIndex,
       arguments: payload,
     });
   }
 
   sseEvent(res, "response.output_item.done", {
     type: "response.output_item.done",
-    output_index: 0,
+    output_index: outputIndex,
     item: completedItem,
   });
   remember?.(completedItem);

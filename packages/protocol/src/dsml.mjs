@@ -1,5 +1,7 @@
-// DeepSeek tool-call parsing (DSML/XML/JSON heuristics), independent of transport.
-function findToolSpec(name, tools) {
+// Tolerant prompt-driven tool-call parser (DSML first, with legacy fallbacks).
+import { createToolCallIR } from "./tool-call-ir.mjs";
+
+function findToolSpec(name, tools = []) {
   const normalized = String(name || "").trim();
   if (!normalized) return null;
   return (
@@ -15,20 +17,42 @@ function parseToolAttributes(raw = "") {
   const attrs = {};
   const quoted = /([:\w.-]+)\s*=\s*(["'])(.*?)\2/g;
   for (const match of raw.matchAll(quoted)) {
-    attrs[match[1]] = match[3];
+    attrs[match[1]] = decodeXmlEntities(match[3]);
   }
 
   const unquoted = /([:\w.-]+)\s*=\s*([^\s"'=<>`]+)/g;
   for (const match of raw.matchAll(unquoted)) {
-    if (!attrs[match[1]]) attrs[match[1]] = match[2];
+    if (attrs[match[1]] === undefined) attrs[match[1]] = decodeXmlEntities(match[2]);
   }
   return attrs;
+}
+
+function decodeXmlEntities(value) {
+  return String(value)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function decodeXmlValues(value) {
+  if (typeof value === "string") return decodeXmlEntities(value);
+  if (Array.isArray(value)) return value.map(decodeXmlValues);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, decodeXmlValues(entry)]));
+  }
+  return value;
 }
 
 function stripCodeFence(text) {
   const trimmed = String(text || "").trim();
   const fenced = trimmed.match(/^```[\w-]*\s*\n([\s\S]*?)\n?```$/);
   return fenced ? fenced[1].trim() : trimmed;
+}
+
+export function normalizeDsmlText(text) {
+  return String(text || "").replace(/\uFF5C/g, "|").trim();
 }
 
 export function parseJsonMaybe(raw) {
@@ -135,48 +159,55 @@ function parseToolJsonObject(obj, tools) {
   };
 }
 
-function parseDsmlToolCall(text, tools) {
-  const raw = String(text || "").replace(/\uFF5C+/g, "|");
-  if (!/DSML/i.test(raw) && !/<invoke\s+name=/i.test(raw)) return null;
-  const dsml = "\\|*DSML\\|*";
-  const prefix = `(?:${dsml}\\s*)?`;
-  const invoke = raw.match(
-    new RegExp(
-      `<${prefix}invoke\\s+name=["']([^"']+)["']\\s*>([\\s\\S]*?)(?:</\\s*${prefix}invoke>|$)`,
-      "i",
-    ),
-  );
-  if (!invoke) return null;
-  const name = invoke[1].trim();
-  if (!name) return null;
-  const spec = findToolSpec(name, tools);
-  const args = {};
-  const parameterRe = new RegExp(
-    `<${prefix}parameter\\s+name=["']([^"']+)["'](?:\\s+string=["'](true|false)["'])?\\s*>([\\s\\S]*?)</\\s*${prefix}parameter>`,
+const DSML_PREFIX = "(?:\\s*\\|\\s*DSML\\s*\\|\\s*)?";
+
+function parseDsmlToolCalls(text, tools) {
+  const raw = normalizeDsmlText(text);
+  if (!/DSML/i.test(raw) && !/<invoke\s+name\s*=/i.test(raw)) return [];
+
+  const invokePattern = new RegExp(
+    `<${DSML_PREFIX}invoke\\b([^>]*)>([\\s\\S]*?)(?:<\\/\\s*${DSML_PREFIX}invoke\\s*>|(?=<${DSML_PREFIX}invoke\\b)|$)`,
     "gi",
   );
-  for (const match of invoke[2].matchAll(parameterRe)) {
-    const value = match[3];
-    if (match[2] === "false") {
-      const parsed = parseJsonMaybe(value);
-      args[match[1]] = parsed === null ? value : parsed;
+  const parameterPattern = new RegExp(
+    `<${DSML_PREFIX}parameter\\b([^>]*)>([\\s\\S]*?)(?:<\\/\\s*${DSML_PREFIX}parameter\\s*>|(?=<${DSML_PREFIX}parameter\\b)|$)`,
+    "gi",
+  );
+  const calls = [];
+
+  for (const invoke of raw.matchAll(invokePattern)) {
+    const attrs = parseToolAttributes(invoke[1]);
+    const name = String(attrs.name || "").trim();
+    if (!name) continue;
+    const spec = findToolSpec(name, tools);
+    const args = {};
+
+    for (const parameter of invoke[2].matchAll(parameterPattern)) {
+      const parameterAttrs = parseToolAttributes(parameter[1]);
+      const parameterName = String(parameterAttrs.name || "").trim();
+      if (!parameterName) continue;
+      const value = decodeXmlEntities(parameter[2]);
+      if (String(parameterAttrs.string || "true").toLowerCase() === "false") {
+        const parsed = parseJsonMaybe(value);
+        args[parameterName] = parsed === null ? value : decodeXmlValues(parsed);
+      } else {
+        args[parameterName] = value;
+      }
+    }
+
+    if (spec.kind === "custom") {
+      const input = typeof args.input === "string" ? args.input : JSON.stringify(args);
+      calls.push({ spec, id: attrs.id || "", arguments: normalizeCustomInput(input) });
     } else {
-      args[match[1]] = value;
+      calls.push({ spec, id: attrs.id || "", arguments: JSON.stringify(args) });
     }
   }
-  if (spec.kind === "custom") {
-    const input = typeof args.input === "string" ? args.input : JSON.stringify(args);
-    return { spec, id: "", arguments: normalizeCustomInput(input) };
-  }
-  return { spec, id: "", arguments: JSON.stringify(args) };
+  return calls;
 }
 
-export function parseToolCallFromText(text, tools) {
+function parseFallbackToolCall(text, tools) {
   const raw = String(text || "").trim();
   if (!raw) return null;
-
-  const dsml = parseDsmlToolCall(raw, tools);
-  if (dsml) return dsml;
 
   const xml = raw.match(/<tool_call\b([^>]*)>([\s\S]*?)(?:<\/tool_call>|$)/i);
   if (xml) {
@@ -204,7 +235,7 @@ export function parseToolCallFromText(text, tools) {
   const directCall = parseToolJsonObject(parsed, tools);
   if (directCall) return directCall;
 
-  const mentionedTool = tools.find((tool) => {
+  const mentionedTool = (Array.isArray(tools) ? tools : []).find((tool) => {
     const name = String(tool.wireName || tool.name || "").trim();
     const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return (
@@ -215,22 +246,72 @@ export function parseToolCallFromText(text, tools) {
       ).test(raw)
     );
   });
-  if (mentionedTool) {
-    const jsonText = extractFirstJsonObject(raw);
-    const jsonObj = parseJsonMaybe(jsonText);
-    const args =
-      jsonObj && typeof jsonObj === "object" && !jsonObj.tool && !jsonObj.name && !jsonObj.function
-        ? jsonObj
-        : jsonObj?.arguments || jsonObj?.parameters || {};
-    return {
-      spec: mentionedTool,
-      id: jsonObj?.id || jsonObj?.call_id || "",
-      arguments:
-        mentionedTool.kind === "custom"
-          ? normalizeCustomInput(typeof args === "string" ? args : JSON.stringify(args ?? ""))
-          : normalizeFunctionArguments(typeof args === "string" ? args : JSON.stringify(args ?? {})),
-    };
+  if (!mentionedTool) return null;
+
+  const jsonText = extractFirstJsonObject(raw);
+  const jsonObj = parseJsonMaybe(jsonText);
+  const args =
+    jsonObj && typeof jsonObj === "object" && !jsonObj.tool && !jsonObj.name && !jsonObj.function
+      ? jsonObj
+      : jsonObj?.arguments || jsonObj?.parameters || {};
+  return {
+    spec: mentionedTool,
+    id: jsonObj?.id || jsonObj?.call_id || "",
+    arguments:
+      mentionedTool.kind === "custom"
+        ? normalizeCustomInput(typeof args === "string" ? args : JSON.stringify(args ?? ""))
+        : normalizeFunctionArguments(typeof args === "string" ? args : JSON.stringify(args ?? {})),
+  };
+}
+
+function callConfidence(raw, source) {
+  const normalized = normalizeDsmlText(raw);
+  if (source === "dsml") {
+    return /<\/\s*(?:\|\s*DSML\s*\|\s*)?invoke\s*>/i.test(normalized) ? 0.98 : 0.78;
+  }
+  if (/<tool_call\b[\s\S]*?<\/tool_call>/i.test(raw)) return 0.92;
+  if (/```(?:tool_json|json)/i.test(raw)) return 0.86;
+  if (parseJsonMaybe(raw)) return 0.82;
+  return 0.65;
+}
+
+function attachIR(call, raw, source) {
+  let params;
+  if (call.spec.kind === "custom") {
+    params = { input: call.arguments };
+  } else {
+    const parsed = parseJsonMaybe(call.arguments);
+    params = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  }
+  const ir = createToolCallIR({
+    name: call.spec.wireName || call.spec.name,
+    params,
+    raw,
+    confidence: callConfidence(raw, source),
+    source,
+  });
+  return { ...call, ir };
+}
+
+export function parseToolCallsFromText(text, tools = []) {
+  const originalRaw = String(text || "").trim();
+  const normalized = normalizeDsmlText(originalRaw);
+  if (!normalized) return [];
+
+  const toolList = Array.isArray(tools) ? tools : [];
+  const dsmlCalls = parseDsmlToolCalls(normalized, toolList);
+  if (dsmlCalls.length) {
+    return dsmlCalls.map((call) => attachIR(call, originalRaw, "dsml"));
   }
 
-  return null;
+  const fallback = parseFallbackToolCall(normalized, toolList);
+  return fallback ? [attachIR(fallback, originalRaw, "fallback")] : [];
+}
+
+export function parseToolCallFromText(text, tools = []) {
+  return parseToolCallsFromText(text, tools)[0] || null;
+}
+
+export function parseToolCallIRsFromText(text, tools = []) {
+  return parseToolCallsFromText(text, tools).map((call) => call.ir);
 }

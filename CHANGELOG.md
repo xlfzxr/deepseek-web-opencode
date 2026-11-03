@@ -7,6 +7,14 @@
 - Extract HTTP and OpenAI transport helpers into the `packages/transport` workspace.
 - Resolve auth, profile, fingerprint, and device paths from root configuration and inject them into the provider.
 - Remove the built-in automated test scripts and test-only GitHub Actions workflow.
+- Define a versioned DSML prompt contract with SHA-256 logging, tolerant multi-invoke parsing,
+  canonical IR, OpenCode tool/parameter mapping, schema-guided coercion, and nested arguments.
+- Emit multiple parsed invocations through Chat Completions and Responses JSON/SSE outputs;
+  add incremental SSE parsing so ordinary text streams eagerly while tool calls remain buffered for validation.
+- Add `prompts/dsml-spec.md`, `docs/mapping.md`, fixture-capture guidance, and the phased `roadmap.md`.
+- Add Ajv-based tool-schema validation, a bounded two-retry DSML repair loop, and private
+  local JSONL traces with an offline replay command. Real DeepSeek fixture collection, per-tool
+  alerting, and provider adapters remain pending.
 - Architecture hardening: `apps/api/src/server.mjs` is now bootstrap + route wiring only;
   prompt normalization, tool-call registry, JSON/SSE shaping and fingerprint inspection moved
   into orchestration/transport modules.
