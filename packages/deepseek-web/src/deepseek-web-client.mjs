@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { SHA3_WASM_B64 } from "./deepseek-pow-wasm.mjs";
+import { solveDeepSeekHashV1WithReza } from "./pow-fallback/rezaparsian-solver.mjs";
 import { ENDPOINTS, createHeaderLayer } from "./headers/upstream.mjs";
 import {
   UpstreamError,
@@ -33,6 +34,47 @@ async function loadDeepSeekHashWasm() {
   })();
 
   return wasmInstancePromise;
+}
+
+// The bridge's built-in DeepSeekHashV1 path: instantiate the embedded WASM payload and
+// run wasm_solve. Throws on incompatible exports or when no answer is found, so the
+// caller can fall back to the vendored RezaParsian solver.
+async function solveEmbeddedDeepSeekHashV1(target, salt, expireAt, difficulty) {
+  const instance = await loadDeepSeekHashWasm();
+  const exports = instance.exports;
+  const memory = exports.memory;
+  const alloc = exports.__wbindgen_export_0;
+  const addToStack = exports.__wbindgen_add_to_stack_pointer;
+  const wasmSolve = exports.wasm_solve;
+
+  if (typeof alloc !== "function" || typeof addToStack !== "function" || typeof wasmSolve !== "function") {
+    throw new Error("embedded DeepSeekHashV1 WASM is missing expected exports");
+  }
+
+  const encodeString = (value) => {
+    const buffer = Buffer.from(value, "utf8");
+    const ptr = alloc(buffer.length, 1);
+    new Uint8Array(memory.buffer).set(buffer, ptr);
+    return [ptr, buffer.length];
+  };
+
+  const [ptrC, lenC] = encodeString(target);
+  const [ptrP, lenP] = encodeString(`${salt}_${expireAt}_`);
+  const retptr = addToStack(-16);
+  wasmSolve(retptr, ptrC, lenC, ptrP, lenP, difficulty);
+
+  const view = new DataView(memory.buffer);
+  const status = view.getInt32(retptr, true);
+  const answer = view.getFloat64(retptr + 8, true);
+  addToStack(16);
+
+  if (status === 0) {
+    throw new UpstreamError("DeepSeekHashV1 PoW 没有找到答案", {
+      kind: UpstreamErrorKind.PROTOCOL,
+      retryable: false,
+    });
+  }
+  return answer;
 }
 
 export class DeepSeekWebClient {
@@ -135,37 +177,28 @@ export class DeepSeekWebClient {
     }
 
     if (algorithm === "DeepSeekHashV1") {
-      const instance = await loadDeepSeekHashWasm();
-      const exports = instance.exports;
-      const memory = exports.memory;
-      const alloc = exports.__wbindgen_export_0;
-      const addToStack = exports.__wbindgen_add_to_stack_pointer;
-      const wasmSolve = exports.wasm_solve;
-
-      const encodeString = (value) => {
-        const buffer = Buffer.from(value, "utf8");
-        const ptr = alloc(buffer.length, 1);
-        new Uint8Array(memory.buffer).set(buffer, ptr);
-        return [ptr, buffer.length];
-      };
-
-      const [ptrC, lenC] = encodeString(target);
-      const [ptrP, lenP] = encodeString(`${salt}_${expireAt}_`);
-      const retptr = addToStack(-16);
-      wasmSolve(retptr, ptrC, lenC, ptrP, lenP, difficulty);
-
-      const view = new DataView(memory.buffer);
-      const status = view.getInt32(retptr, true);
-      const answer = view.getFloat64(retptr + 8, true);
-      addToStack(16);
-
-      if (status === 0) {
-        throw new UpstreamError("DeepSeekHashV1 PoW 没有找到答案", {
-          kind: UpstreamErrorKind.PROTOCOL,
-          retryable: false,
-        });
+      try {
+        return solveEmbeddedDeepSeekHashV1(target, salt, expireAt, difficulty);
+      } catch (primaryError) {
+        // Fail over to the vendored @rezaparsian solver when the embedded payload
+        // cannot solve (drift, incompatible exports, or no answer found).
+        try {
+          const answer = await solveDeepSeekHashV1WithReza(challenge);
+          this.headerLayer?.log?.(
+            "[pow] embedded DeepSeekHashV1 solver failed; RezaParsian fallback succeeded",
+          );
+          return answer;
+        } catch (fallbackError) {
+          throw new UpstreamError(
+            `DeepSeekHashV1 PoW 没有找到答案（embedded: ${primaryError.message}; fallback: ${fallbackError.message}）`,
+            {
+              kind: UpstreamErrorKind.PROTOCOL,
+              retryable: false,
+              cause: primaryError,
+            },
+          );
+        }
       }
-      return answer;
     }
 
     throw new UpstreamError(`不支持的 DeepSeek PoW 算法：${algorithm}`, {

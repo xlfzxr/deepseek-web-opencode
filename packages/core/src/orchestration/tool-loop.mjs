@@ -7,6 +7,7 @@ import { validateToolCallAgainstSchema } from "./schema-validator.mjs";
 export const DEFAULT_TOOL_BUDGET = 3;
 const MAX_TOOL_BUDGET = 8;
 export const MAX_TOOL_REPAIR_ATTEMPTS = 2;
+export const DEFAULT_MAX_CONCURRENT_TOOL_CALLS = 2;
 
 function boundedRounds(value) {
   const parsed = Number(value);
@@ -101,6 +102,7 @@ export async function* runToolLoop({
   tools = [],
   budget = DEFAULT_TOOL_BUDGET,
   maxRepairAttempts = MAX_TOOL_REPAIR_ATTEMPTS,
+  maxConcurrentCalls = DEFAULT_MAX_CONCURRENT_TOOL_CALLS,
   ctx,
   signal,
   parseToolCall,
@@ -109,11 +111,15 @@ export async function* runToolLoop({
   recordTrace = async () => {},
   streamText = false,
 }) {
-  const rounds = boundedRounds(budget);
-  const repairLimit = Math.min(
-    MAX_TOOL_REPAIR_ATTEMPTS,
-    Math.max(0, Math.min(rounds - 1, Math.trunc(Number(maxRepairAttempts) || 0))),
+  boundedRounds(budget);
+  const repairLimit = Math.max(
+    0,
+    Math.min(MAX_TOOL_REPAIR_ATTEMPTS, Math.trunc(Number(maxRepairAttempts) || 0)),
   );
+  const concurrencyLimit =
+    Number.isFinite(maxConcurrentCalls) && maxConcurrentCalls > 0
+      ? Math.trunc(maxConcurrentCalls)
+      : DEFAULT_MAX_CONCURRENT_TOOL_CALLS;
   const requestId = ctx?.requestId || "unknown";
   let current = normalized;
   let visibleText = "";
@@ -145,10 +151,17 @@ export async function* runToolLoop({
       }
     }
 
-    const calls = incompleteToolCall
+    const parsedCalls = incompleteToolCall
       ? []
       : normalizeParsedCalls(parseToolCall?.(fullText, tools));
-    if (!calls.length && !looksLikeToolAttempt(fullText)) {
+    const tooManyCalls = parsedCalls.length > concurrencyLimit;
+    if (tooManyCalls) {
+      log(
+        `[toolcall] request=${requestId} too_many=${parsedCalls.length} max=${concurrencyLimit}`,
+      );
+    }
+    const calls = tooManyCalls ? [] : parsedCalls;
+    if (!calls.length && !tooManyCalls && !looksLikeToolAttempt(fullText)) {
       await recordTraceSafely(recordTrace, {
         requestId,
         promptVersion: normalized.promptVersion || null,
@@ -171,6 +184,11 @@ export async function* runToolLoop({
     const issues = calls.length
       ? formatIssues(calls, results)
       : results.flatMap((result) => (result.errors || []).map((error) => `${error.path} [${error.keyword}]: ${error.message}`));
+    if (tooManyCalls) {
+      issues.push(
+        `emit at most ${concurrencyLimit} invoke block(s) per response; got ${parsedCalls.length}`,
+      );
+    }
     const allValid = calls.length > 0 && results.every((result) => result.valid);
     const emittedCallIds = allValid ? assignCallIds(calls, round) : [];
     const outcome = allValid ? "valid" : round < repairLimit ? "repair" : "fallback";

@@ -18,6 +18,7 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_API_KEY_HINT = "deepseek";
 export const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 export const DEFAULT_CORS_MAX_AGE_SECONDS = 600;
+export const DEFAULT_TOOL_MAX_CONCURRENT_CALLS = 2;
 
 const RISK_DEFAULTS = Object.freeze({
   ttlMs: 10 * 60 * 1000,
@@ -64,6 +65,11 @@ export function readConfig(env = process.env) {
     },
     models: DEFAULT_MODELS,
     apiKeyHint: DEFAULT_API_KEY_HINT,
+    tool: {
+      maxConcurrentCalls: Math.trunc(
+        positiveNumber(env.DEEPSEEK_TOOL_MAX_CONCURRENT_CALLS, DEFAULT_TOOL_MAX_CONCURRENT_CALLS),
+      ),
+    },
     // Options handed to the DeepSeek provider package.
     header: {
       env: {},

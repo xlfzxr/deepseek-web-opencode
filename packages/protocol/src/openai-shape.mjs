@@ -65,10 +65,22 @@ export function responseToolDescription(tool) {
   return String(source.description || tool.description || "").trim();
 }
 
+function stripSchemaKey(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(stripSchemaKey);
+  const copy = { ...obj };
+  delete copy.$schema;
+  for (const key in copy) {
+    copy[key] = stripSchemaKey(copy[key]);
+  }
+  return copy;
+}
+
 export function responseToolParameters(tool) {
   if (!tool || typeof tool !== "object") return {};
   const source = tool.function && typeof tool.function === "object" ? tool.function : tool;
-  return source.parameters || source.input_schema || tool.parameters || tool.input_schema || {};
+  const rawParams = source.parameters || source.input_schema || tool.parameters || tool.input_schema || {};
+  return stripSchemaKey(rawParams);
 }
 
 export function extractResponseTools(body = {}) {
@@ -327,7 +339,7 @@ export function makeResponseBase(responseId, model, status, output = []) {
     status,
     model,
     output,
-    parallel_tool_calls: false,
+    parallel_tool_calls: true,
     tool_choice: "auto",
     tools: [],
     usage: {

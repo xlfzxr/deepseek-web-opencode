@@ -46,15 +46,19 @@ export function makeChatToolCallDelta(toolCall, index = 0) {
 }
 
 export function writeChatToolCalls(res, { requestId, created, model, toolCalls }) {
-  writeChatChunk(res, {
-    requestId,
-    created,
-    model,
-    delta: {
-      role: "assistant",
-      tool_calls: toolCalls.map((toolCall, index) => makeChatToolCallDelta(toolCall, index)),
-    },
-  });
+  // One delta per tool call, matching OpenAI's streaming shape. Sending every call in a
+  // single delta makes clients that merge by index keep only the first call.
+  for (const [index, toolCall] of toolCalls.entries()) {
+    writeChatChunk(res, {
+      requestId,
+      created,
+      model,
+      delta: {
+        role: "assistant",
+        tool_calls: [makeChatToolCallDelta(toolCall, index)],
+      },
+    });
+  }
   return writeChatChunk(res, {
     requestId,
     created,

@@ -7,7 +7,12 @@ import { chatCompletionJson } from "@deepseek-web-opencode/transport/openai-json
 import { writeChatChunk, writeChatFinish, writeChatToolCalls } from "@deepseek-web-opencode/transport/openai-sse";
 import { openSse, sseDone } from "@deepseek-web-opencode/transport/sse-writer";
 
-export function createChatCompletionHandlers({ config, pipeline, pushLog, recordToolTrace = async () => {} }) {
+export function createChatCompletionHandlers({
+  config,
+  pipeline,
+  pushLog,
+  recordToolTrace = async () => {},
+}) {
   async function streamChatCompletions(res, body, options = {}) {
     const normalized = normalizeChatRequest(body, { defaultModel: config.models[0] });
     const stream = openSse(res, { heartbeatMs: config.sse.heartbeatMs });
@@ -30,6 +35,7 @@ export function createChatCompletionHandlers({ config, pipeline, pushLog, record
         log: pushLog,
         recordTrace: recordToolTrace,
         streamText: true,
+        maxConcurrentCalls: config.tool?.maxConcurrentCalls,
       })) {
         if (event.type === "text_delta" && event.delta) {
           writeChatChunk(res, { requestId, created, model, delta: { content: event.delta } });
@@ -83,6 +89,7 @@ export function createChatCompletionHandlers({ config, pipeline, pushLog, record
         parseToolCall: parseToolCallsFromText,
         log: pushLog,
         recordTrace: recordToolTrace,
+        maxConcurrentCalls: config.tool?.maxConcurrentCalls,
       })) {
         if (event.type === "text_delta" && event.delta) content += event.delta;
         if (event.type === "tool_call_done") toolCalls.push(event.payload);

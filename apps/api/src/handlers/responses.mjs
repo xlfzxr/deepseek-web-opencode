@@ -54,6 +54,7 @@ export function createResponsesHandlers({
           log: pushLog,
           recordTrace: recordToolTrace,
           streamText: true,
+          maxConcurrentCalls: config.tool?.maxConcurrentCalls,
         })
       : pipeline.runChatCompletion(normalized, ctx, signal);
 
@@ -137,6 +138,7 @@ export function createResponsesHandlers({
         parseToolCall: parseToolCallsFromText,
         log: pushLog,
         recordTrace: recordToolTrace,
+        maxConcurrentCalls: config.tool?.maxConcurrentCalls,
       })) {
         if (event.type === "text_delta" && event.delta) content += event.delta;
         if (event.type === "tool_call_done") parsedToolCalls.push(event.payload);

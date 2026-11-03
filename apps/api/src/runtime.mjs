@@ -34,7 +34,6 @@ export function createRuntime(config = readConfig(), deps = {}) {
   const chatSessions = createSessionStore();
   const responseSessions = createSessionStore();
   const toolCalls = createToolCallRegistry();
-
   function pushLog(message, level = "info") {
     const entry = {
       id: Date.now() + Math.random(),
